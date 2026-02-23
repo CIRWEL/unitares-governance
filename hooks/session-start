@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — SessionStart hook
+# Auto-onboards agent, fetches EISV, injects governance context
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Resolve plugin root (parent of hooks/)
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# ---------------------------------------------------------------------------
+# Load defaults, then let env vars override
+# ---------------------------------------------------------------------------
+if [[ -f "${PLUGIN_ROOT}/config/defaults.env" ]]; then
+  # shellcheck source=../config/defaults.env
+  source "${PLUGIN_ROOT}/config/defaults.env"
+fi
+
+SERVER_URL="${UNITARES_SERVER_URL:-http://localhost:8767}"
+AGENT_PREFIX="${UNITARES_AGENT_PREFIX:-claude}"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+escape_for_json() {
+  local text="$1"
+  python3 -c "
+import json, sys
+print(json.dumps(sys.argv[1])[1:-1])
+" "$text"
+}
+
+call_tool() {
+  local tool_name="$1"
+  local arguments="$2"
+  curl -s --max-time 10 \
+    -X POST "${SERVER_URL}/v1/tools/call" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"${tool_name}\", \"arguments\": ${arguments}}" 2>/dev/null || echo ""
+}
+
+parse_tool_response() {
+  # MCP wraps tool results: result.content[0].text is a JSON string
+  local raw="$1"
+  python3 -c "
+import json, sys
+try:
+    outer = json.loads(sys.argv[1])
+    # Navigate MCP wrapper: result -> content[0] -> text (JSON string)
+    if 'result' in outer:
+        content = outer['result']
+        if isinstance(content, dict) and 'content' in content:
+            text = content['content'][0]['text']
+            inner = json.loads(text)
+            print(json.dumps(inner))
+        else:
+            print(json.dumps(content))
+    else:
+        print(json.dumps(outer))
+except Exception:
+    print('{}')
+" "$raw"
+}
+
+# ---------------------------------------------------------------------------
+# Derive agent name
+# ---------------------------------------------------------------------------
+PROJECT_BASENAME="$(basename "${PWD}")"
+DATE_TAG="$(date +%Y%m%d)"
+AGENT_NAME="${AGENT_PREFIX}_${PROJECT_BASENAME}_${DATE_TAG}"
+
+# ---------------------------------------------------------------------------
+# Load skill content (available regardless of server status)
+# ---------------------------------------------------------------------------
+SKILL_CONTENT=""
+SKILL_FILE="${PLUGIN_ROOT}/skills/governance-fundamentals/SKILL.md"
+if [[ -f "${SKILL_FILE}" ]]; then
+  SKILL_CONTENT="$(cat "${SKILL_FILE}")"
+fi
+
+# ---------------------------------------------------------------------------
+# Ping governance server
+# ---------------------------------------------------------------------------
+HEALTH_STATUS=$(curl -s --max-time 3 "${SERVER_URL}/health" 2>/dev/null || echo "")
+
+if [[ -z "${HEALTH_STATUS}" ]]; then
+  # -------------------------------------------------------------------------
+  # Server unreachable — inject skill content only
+  # -------------------------------------------------------------------------
+  CONTEXT="UNITARES Governance: OFFLINE (${SERVER_URL} unreachable). Agent not onboarded. Governance tools may be unavailable."
+  if [[ -n "${SKILL_CONTENT}" ]]; then
+    CONTEXT="${CONTEXT}\n\n--- Governance Fundamentals (reference) ---\n${SKILL_CONTENT}"
+  fi
+
+  ESCAPED_CONTEXT="$(escape_for_json "${CONTEXT}")"
+  cat <<ENDJSON
+{
+  "additional_context": "${ESCAPED_CONTEXT}",
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "${ESCAPED_CONTEXT}"
+  }
+}
+ENDJSON
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Server reachable — onboard agent
+# ---------------------------------------------------------------------------
+ONBOARD_RAW=$(call_tool "onboard" "{\"name\": \"${AGENT_NAME}\", \"model_type\": \"claude-code\"}")
+
+# Parse onboard response
+ONBOARD_PARSED=$(parse_tool_response "${ONBOARD_RAW}")
+
+# Extract agent_id and client_session_id
+AGENT_INFO=$(python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    agent_id = data.get('resolved_agent_id', '') or data.get('agent_id', '')
+    if not agent_id:
+        sig = data.get('agent_signature', {})
+        agent_id = sig.get('agent_id', '')
+    session_id = data.get('client_session_id', '')
+    print(json.dumps({'agent_id': agent_id, 'client_session_id': session_id}))
+except Exception:
+    print(json.dumps({'agent_id': '', 'client_session_id': ''}))
+" "${ONBOARD_PARSED}")
+
+AGENT_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['agent_id'])" "${AGENT_INFO}")
+CLIENT_SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['client_session_id'])" "${AGENT_INFO}")
+
+# ---------------------------------------------------------------------------
+# Cache session to .claude/unitares-session.json
+# ---------------------------------------------------------------------------
+SESSION_CACHE_DIR="${PWD}/.claude"
+mkdir -p "${SESSION_CACHE_DIR}"
+
+python3 -c "
+import json, sys
+cache = {
+    'server_url': sys.argv[1],
+    'agent_name': sys.argv[2],
+    'agent_id': sys.argv[3],
+    'client_session_id': sys.argv[4]
+}
+with open(sys.argv[5], 'w') as f:
+    json.dump(cache, f, indent=2)
+" "${SERVER_URL}" "${AGENT_NAME}" "${AGENT_ID}" "${CLIENT_SESSION_ID}" "${SESSION_CACHE_DIR}/unitares-session.json"
+
+# ---------------------------------------------------------------------------
+# Fetch EISV via get_governance_metrics
+# ---------------------------------------------------------------------------
+EISV_SUMMARY=""
+if [[ -n "${CLIENT_SESSION_ID}" ]]; then
+  METRICS_RAW=$(call_tool "get_governance_metrics" "{\"client_session_id\": \"${CLIENT_SESSION_ID}\"}")
+  METRICS_PARSED=$(parse_tool_response "${METRICS_RAW}")
+
+  EISV_SUMMARY=$(python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    # Try to extract EISV values from various response shapes
+    eisv = data.get('eisv', data.get('metrics', {}))
+    if isinstance(eisv, dict):
+        e = eisv.get('energy', eisv.get('E', '?'))
+        i = eisv.get('information_integrity', eisv.get('I', '?'))
+        s = eisv.get('entropy', eisv.get('S', '?'))
+        v = eisv.get('void', eisv.get('V', '?'))
+        verdict = data.get('verdict', data.get('governance_verdict', ''))
+        coherence = data.get('coherence', '')
+        parts = [f'E={e} I={i} S={s} V={v}']
+        if verdict:
+            parts.append(f'verdict={verdict}')
+        if coherence:
+            parts.append(f'coherence={coherence}')
+        print(' | '.join(parts))
+    else:
+        print('EISV data not available')
+except Exception:
+    print('EISV fetch failed')
+" "${METRICS_PARSED}")
+fi
+
+# ---------------------------------------------------------------------------
+# Build context output
+# ---------------------------------------------------------------------------
+AGENT_ID_SNIPPET=""
+if [[ -n "${AGENT_ID}" ]]; then
+  AGENT_ID_SNIPPET="${AGENT_ID:0:8}"
+fi
+
+CONTEXT="UNITARES Governance: ONLINE
+Agent: ${AGENT_NAME} (${AGENT_ID_SNIPPET}...)
+Session: ${CLIENT_SESSION_ID:0:12}..."
+
+if [[ -n "${EISV_SUMMARY}" ]]; then
+  CONTEXT="${CONTEXT}
+EISV: ${EISV_SUMMARY}"
+fi
+
+CONTEXT="${CONTEXT}
+
+Governance is active. Every Edit/Write auto-checks-in via PostToolUse hook."
+
+if [[ -n "${SKILL_CONTENT}" ]]; then
+  CONTEXT="${CONTEXT}
+
+--- Governance Fundamentals ---
+${SKILL_CONTENT}"
+fi
+
+ESCAPED_CONTEXT="$(escape_for_json "${CONTEXT}")"
+
+cat <<ENDJSON
+{
+  "additional_context": "${ESCAPED_CONTEXT}",
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "${ESCAPED_CONTEXT}"
+  }
+}
+ENDJSON
