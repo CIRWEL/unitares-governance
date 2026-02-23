@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — PostToolUse hook (Edit/Write)
+# Auto-checkin: reports every code edit to the governance server
+# Runs async — must never block or produce output on failure
+set -uo pipefail
+
+# ---------------------------------------------------------------------------
+# Read cached session
+# ---------------------------------------------------------------------------
+SESSION_FILE="${PWD}/.claude/unitares-session.json"
+
+if [[ ! -f "${SESSION_FILE}" ]]; then
+  exit 0
+fi
+
+# Extract server_url and client_session_id from cache
+SESSION_INFO=$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    print(json.dumps({
+        'server_url': data.get('server_url', ''),
+        'client_session_id': data.get('client_session_id', '')
+    }))
+except Exception:
+    print(json.dumps({'server_url': '', 'client_session_id': ''}))
+" "${SESSION_FILE}" 2>/dev/null) || exit 0
+
+SERVER_URL=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['server_url'])" "${SESSION_INFO}" 2>/dev/null) || exit 0
+CLIENT_SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['client_session_id'])" "${SESSION_INFO}" 2>/dev/null) || exit 0
+
+if [[ -z "${SERVER_URL}" || -z "${CLIENT_SESSION_ID}" ]]; then
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Read hook input from stdin (Claude passes tool info as JSON)
+# ---------------------------------------------------------------------------
+HOOK_INPUT=""
+if [[ ! -t 0 ]]; then
+  HOOK_INPUT=$(cat 2>/dev/null) || true
+fi
+
+# Extract file_path from tool_input
+FILE_PATH=$(python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    # Tool input may be nested under tool_input or directly available
+    tool_input = data.get('tool_input', data.get('input', data))
+    fp = tool_input.get('file_path', tool_input.get('path', ''))
+    if fp:
+        # Use just the filename for brevity
+        import os
+        print(os.path.basename(fp))
+    else:
+        print('unknown file')
+except Exception:
+    print('unknown file')
+" "${HOOK_INPUT}" 2>/dev/null) || FILE_PATH="unknown file"
+
+# ---------------------------------------------------------------------------
+# Call process_agent_update
+# ---------------------------------------------------------------------------
+curl -s --max-time 5 \
+  -X POST "${SERVER_URL}/v1/tools/call" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"process_agent_update\",
+    \"arguments\": {
+      \"response_text\": \"Edited: ${FILE_PATH}\",
+      \"complexity\": 0.3,
+      \"confidence\": 0.7,
+      \"client_session_id\": \"${CLIENT_SESSION_ID}\"
+    }
+  }" >/dev/null 2>&1 || true
+
+exit 0
