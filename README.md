@@ -30,7 +30,7 @@ Thermodynamic governance for AI agents. This Claude Code plugin automatically en
 
 ```bash
 # Clone the plugin
-git clone https://github.com/hikewa/unitares-governance.git
+git clone https://github.com/CIRWEL/unitares-governance.git
 
 # Install in Claude Code (from the repo directory)
 # Or symlink into ~/.claude/plugins/
