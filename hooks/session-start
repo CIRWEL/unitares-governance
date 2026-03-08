@@ -67,8 +67,11 @@ except Exception:
 # Derive agent name
 # ---------------------------------------------------------------------------
 PROJECT_BASENAME="$(basename "${PWD}")"
-DATE_TAG="$(date +%Y%m%d)"
-AGENT_NAME="${AGENT_PREFIX}_${PROJECT_BASENAME}_${DATE_TAG}"
+if [[ "${PWD}" == "${HOME}" || -z "${PROJECT_BASENAME}" || "${PROJECT_BASENAME}" == "/" ]]; then
+  AGENT_NAME="$(hostname -s)"
+else
+  AGENT_NAME="${PROJECT_BASENAME}"
+fi
 
 # ---------------------------------------------------------------------------
 # Load skill content (available regardless of server status)
@@ -203,7 +206,8 @@ fi
 
 CONTEXT="${CONTEXT}
 
-Governance is active. Every Edit/Write auto-checks-in via PostToolUse hook."
+Governance is active. Every Edit/Write auto-checks-in via PostToolUse hook.
+If governance tools don't recognize you, call bind_session(client_session_id=\"${CLIENT_SESSION_ID}\")."
 
 if [[ -n "${SKILL_CONTENT}" ]]; then
   CONTEXT="${CONTEXT}
