@@ -4,6 +4,10 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and autonomous governance
   actions as a living Discord server.
+last_verified: "2026-03-20"
+freshness_days: 14
+source_files:
+  - unitares-discord-bridge/bridge/bot.py
 ---
 
 # Discord Bridge

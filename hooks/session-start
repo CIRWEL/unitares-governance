@@ -83,6 +83,19 @@ if [[ -f "${SKILL_FILE}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Check skill freshness — warn if last_verified is stale
+# ---------------------------------------------------------------------------
+if [[ -n "${SKILL_CONTENT}" ]]; then
+  FRESHNESS_WARNING=$(python3 "${PLUGIN_ROOT}/scripts/_freshness_warning.py" "${SKILL_CONTENT}" 2>/dev/null || true)
+
+  if [[ -n "${FRESHNESS_WARNING}" ]]; then
+    SKILL_CONTENT="${FRESHNESS_WARNING}
+
+${SKILL_CONTENT}"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Ping governance server
 # ---------------------------------------------------------------------------
 HEALTH_STATUS=$(curl -s --max-time 3 "${SERVER_URL}/health" 2>/dev/null || echo "")

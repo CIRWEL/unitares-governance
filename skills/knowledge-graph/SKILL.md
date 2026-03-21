@@ -3,6 +3,11 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
+last_verified: "2026-03-20"
+freshness_days: 14
+source_files:
+  - governance-mcp-v1/src/mcp_handlers/knowledge.py
+  - governance-mcp-v1/src/knowledge_graph.py
 ---
 
 # Knowledge Graph

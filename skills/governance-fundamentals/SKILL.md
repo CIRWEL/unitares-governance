@@ -4,6 +4,12 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
+last_verified: "2026-03-20"
+freshness_days: 14
+source_files:
+  - governance-mcp-v1/config/governance_config.py
+  - governance-mcp-v1/src/auto_ground_truth.py
+  - governance-mcp-v1/src/governance_monitor.py
 ---
 
 # Governance Fundamentals
@@ -32,10 +38,6 @@ Every agent has four dimensions, updated through check-ins:
 
 These combine into a **coherence** score and **risk** score that determine governance decisions.
 
-### Lumen Sensor Mappings
-
-For Lumen (the embodied agent on Pi): E=warmth, I=clarity, S=1-stability, V=(1-presence)*0.3. These seed the ODE initial conditions. The governance dynamics then evolve the state independently — the ODE state can diverge from sensor observations, especially for V (signed integral [-2,2] vs unsigned observation [0,0.3]).
-
 ## Basins
 
 Your state sits in a basin — a region of the EISV space:
@@ -61,7 +63,8 @@ A `margin: tight` flag means you are near a basin edge. Be more careful with nex
 
 Coherence measures how well your state vector holds together. It is calculated from the EISV values — not from the content of your work. Think of it as structural health, not semantic quality.
 
-- Range is roughly [0.45, 0.55] in practice
+- Full range is [0, 1], clipped from thermodynamic C(V, Theta)
+- Critical threshold is available via `get_governance_metrics()` in the `thresholds` field — do not hardcode it
 - Do not chase a number — check in honestly and let it track naturally
 - Coherence is derived from C(V, Theta) — it reflects balance, not performance
 
@@ -69,8 +72,7 @@ Coherence measures how well your state vector holds together. It is calculated f
 
 The system tracks whether your stated confidence matches outcomes. Over time this builds a calibration curve.
 
-- Known limitation: it measures peer consensus, not external ground truth
-- Epistemic humility tends to correlate with better trajectories
+- Ground truth comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic outcomes.
 - Overconfidence is tracked and penalizes Information Integrity through the entropy coupling
 
 ## What NOT to Do

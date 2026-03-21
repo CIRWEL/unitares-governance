@@ -4,6 +4,11 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
+last_verified: "2026-03-20"
+freshness_days: 14
+source_files:
+  - governance-mcp-v1/src/mcp_handlers/dialectic.py
+  - governance-mcp-v1/config/governance_config.py
 ---
 
 # Dialectic Reasoning
@@ -88,7 +93,7 @@ Convergence happens when both sides agree on conditions. The synthesis should re
 ## Common Mistakes
 
 - **Ignoring the metrics**: Arguing against a pause while your entropy is at 1.5 and energy is at 0.3. The numbers matter.
-- **Proposing impossible conditions**: "I will achieve coherence 0.95" is not realistic (range is ~0.45-0.55).
+- **Proposing impossible conditions**: "I will achieve coherence 0.95" is not realistic — check `get_governance_metrics()` for your actual range and current value.
 - **Being defensive instead of analytical**: "The system is wrong" vs. "My entropy spiked because of X, and here is how I address it."
 - **Treating dialectic as adversarial**: It is collaborative problem-solving with structure, not a trial. Both sides benefit from honest resolution.
 - **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused guarantees a future pause.
