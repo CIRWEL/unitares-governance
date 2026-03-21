@@ -51,9 +51,10 @@ def check_skills(plugin_root: str, projects_root: str) -> int:
             print(f"  [{YELLOW}-{NC}] {skill_name}: no freshness metadata")
             continue
 
-        verified_date = datetime.strptime(meta["last_verified"], "%Y-%m-%d")
+        verified_date = datetime.strptime(meta["last_verified"], "%Y-%m-%d").replace(hour=23, minute=59, second=59)
         max_days = meta["freshness_days"]
-        age_days = (datetime.now() - verified_date).days
+        verified_date_start = datetime.strptime(meta["last_verified"], "%Y-%m-%d")
+        age_days = (datetime.now() - verified_date_start).days
 
         # Check if source files were modified after last_verified
         source_modified = False
