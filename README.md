@@ -109,6 +109,18 @@ This repo should not:
 - auto-checkin every trivial file write by default
 - override runtime verdicts locally
 
+## Development Workflow
+
+Use a lightweight branch and PR flow for normal changes:
+
+1. create a short-lived branch
+2. keep the change focused
+3. push the branch
+4. open a PR
+5. merge after review or self-review
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the repo convention.
+
 ## License
 
 MIT
