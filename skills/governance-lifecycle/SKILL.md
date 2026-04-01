@@ -8,7 +8,8 @@ last_verified: "2026-03-20"
 freshness_days: 14
 source_files:
   - governance-mcp-v1/src/mcp_handlers/core.py
-  - governance-mcp-v1/src/governance_monitor.py
+  - governance-mcp-v1/src/mcp_handlers/identity/handlers.py
+  - governance-mcp-v1/src/mcp_handlers/admin/handlers.py
 ---
 
 # Agent Lifecycle
@@ -24,10 +25,9 @@ onboard(name, model_type)
 Returns:
 - **UUID**: Your persistent identity across sessions
 - **client_session_id**: Echo this back in subsequent calls for session continuity
+- **continuity metadata**: Newer runtimes may also return `continuity_token_supported` and session-resolution diagnostics
 
-### Naming Convention
-
-`{purpose}_{client}_{date}` — for example: `refactor_hikewa_claude_ai_20260223`
+If the runtime supports a continuity token, prefer it. Otherwise always echo `client_session_id`.
 
 ## Check-ins
 
@@ -67,9 +67,15 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 ## Identity
 
 - Your identity persists across sessions via UUID
-- Session binding happens via MCP session headers (automatic) or `client_session_id` (explicit)
-- One UUID per agent, deterministic across tool calls within a session
-- Pass `client_session_id` from `onboard()` in subsequent calls for continuity
+- Session binding can happen via transport session, `client_session_id`, or continuity token
+- Use `identity()` when continuity seems unclear
+- Inspect:
+  - `identity_status`
+  - `bound_identity`
+  - `session_resolution_source`
+  - `continuity_token_supported`
+
+Strong continuity is better than implicit continuity. If the runtime falls back to weak signals such as fingerprinting, re-onboard and resume with explicit continuity data.
 
 ## Recovery
 
@@ -90,6 +96,8 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 - `onboard()` — Register or reconnect identity
 - `process_agent_update()` — Check in with work summary, complexity, confidence
 - `get_governance_metrics()` — Read your current EISV state
+- `identity()` — Confirm who the runtime thinks you are and how continuity was resolved
+- `health_check()` — Check operator-facing server health when behavior seems odd
 - `search_knowledge_graph()` — Find existing knowledge before creating new entries
 - `leave_note()` — Quick contribution to the knowledge graph
 
@@ -99,7 +107,6 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 - `agent()` — Agent lifecycle (list, archive, get details)
 - `calibration()` — Check or update calibration data
 - `request_dialectic_review()` — Start a dialectic session
-- `health_check()` — System component status
 - `export()` — Export session history
 
 ### Specialized
