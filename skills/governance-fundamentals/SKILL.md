@@ -10,6 +10,7 @@ source_files:
   - governance-mcp-v1/config/governance_config.py
   - governance-mcp-v1/src/auto_ground_truth.py
   - governance-mcp-v1/src/governance_monitor.py
+  - governance-mcp-v1/src/mcp_handlers/core.py
 ---
 
 # Governance Fundamentals
@@ -26,8 +27,8 @@ Every agent has four dimensions, updated through check-ins:
 |-----------|-------|---------|
 | **E** (Energy) | [0, 1] | Productive capacity |
 | **I** (Information Integrity) | [0, 1] | Signal fidelity |
-| **S** (Entropy) | [0, 2] | Semantic uncertainty (lower is better) |
-| **V** (Void) | [-2, 2] | Accumulated E-I imbalance |
+| **S** (Entropy) | inspect live output | Semantic uncertainty (lower is better) |
+| **V** (Void) | inspect live output | Accumulated E-I imbalance |
 
 ### How They Couple
 
@@ -36,7 +37,7 @@ Every agent has four dimensions, updated through check-ins:
 - **S (Entropy)**: Naturally decays (mu*S), rises with ethical drift and task complexity, reduced by coherence. The only dimension that directly responds to complexity.
 - **V (Void)**: Accumulated E-I imbalance. Positive when energy exceeds integrity (running hot), negative when integrity exceeds energy (running careful). Decays toward zero over time. Drives coherence via C(V,Theta).
 
-These combine into a **coherence** score and **risk** score that determine governance decisions.
+These combine into a **coherence** score and **risk** score that determine governance decisions. Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
 
 ## Basins
 
@@ -45,6 +46,8 @@ Your state sits in a basin — a region of the EISV space:
 - **High basin**: Healthy. E and I are high, S and V are low. Normal operating range.
 - **Low basin**: Degraded. May need recovery or intervention.
 - **Boundary**: Transitioning between basins. Extra attention from governance. Verdicts may carry `margin: tight`.
+
+Use `get_governance_metrics()` as the source of truth for the current basin/mode labels rather than assuming they are constant across runtime versions.
 
 ## Verdicts
 
@@ -74,6 +77,14 @@ The system tracks whether your stated confidence matches outcomes. Over time thi
 
 - Ground truth comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic outcomes.
 - Overconfidence is tracked and penalizes Information Integrity through the entropy coupling
+
+## Diagnostics
+
+When the numbers look surprising, do not guess first. Use:
+
+- `identity()` to verify who the runtime thinks you are
+- `health_check()` to verify the server and knowledge graph are healthy
+- `get_governance_metrics()` for the current live thresholds and interpreted state
 
 ## What NOT to Do
 

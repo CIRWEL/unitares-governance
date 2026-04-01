@@ -6,8 +6,9 @@ description: >
 last_verified: "2026-03-20"
 freshness_days: 14
 source_files:
-  - governance-mcp-v1/src/mcp_handlers/knowledge.py
+  - governance-mcp-v1/src/mcp_handlers/knowledge/handlers.py
   - governance-mcp-v1/src/knowledge_graph.py
+  - governance-mcp-v1/src/storage/knowledge_graph_age.py
 ---
 
 # Knowledge Graph
@@ -21,15 +22,15 @@ The knowledge graph is shared institutional memory across all agents. It is back
 Always search before adding new entries:
 
 ```
-search_knowledge_graph(
+knowledge(
+  action: "search",
   query: "description of what you're looking for",
   tags: ["relevant", "tags"],
-  limit: 10,
-  min_similarity: 0.5
+  limit: 10
 )
 ```
 
-This uses semantic search (embeddings) plus tag matching. Duplicate entries fragment knowledge and make search less effective.
+The runtime may still expose older search aliases, but prefer the unified `knowledge(action="search")` path when available. Duplicate entries fragment knowledge and make search less effective.
 
 ## Quick Contribution
 
@@ -37,7 +38,7 @@ For low-friction contributions, use `leave_note()`:
 
 ```
 leave_note(
-  note: "What you discovered or observed",
+  summary: "What you discovered or observed",
   tags: ["domain", "type", "context"]
 )
 ```
@@ -52,12 +53,12 @@ For more control, use the `knowledge()` tool with an action parameter:
 |--------|---------|
 | `store` | Create a new discovery with full metadata |
 | `search` | Search by query, tags, or both |
-| `get` | Retrieve a specific discovery by ID |
-| `list` | List discoveries with filters |
+| `get` | Get knowledge for a specific agent |
+| `list` | List graph statistics or summary views |
 | `update` | Modify an existing discovery (status, content, tags) |
 | `details` | Get full details including graph relationships |
 | `note` | Same as `leave_note()` but through the unified interface |
-| `cleanup` | Mark stale entries for review |
+| `cleanup` | Run lifecycle cleanup for stale entries |
 | `stats` | Get knowledge graph statistics |
 
 ## Discovery Types
@@ -70,8 +71,9 @@ When storing a discovery, classify it:
 | `insight` | Understanding gained from analysis or pattern recognition |
 | `bug_found` | A bug or defect you identified |
 | `improvement` | A suggestion for how something could be better |
-| `analysis` | Detailed examination of a system, pattern, or behavior |
 | `pattern` | A recurring pattern you noticed across multiple instances |
+
+Check the live tool schema if you are unsure which enum values the current runtime accepts. Do not invent discovery types casually.
 
 ## Status Lifecycle
 

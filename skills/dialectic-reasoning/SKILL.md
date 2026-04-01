@@ -7,7 +7,8 @@ description: >
 last_verified: "2026-03-20"
 freshness_days: 14
 source_files:
-  - governance-mcp-v1/src/mcp_handlers/dialectic.py
+  - governance-mcp-v1/src/mcp_handlers/dialectic/handlers.py
+  - governance-mcp-v1/src/mcp_handlers/dialectic/session.py
   - governance-mcp-v1/config/governance_config.py
 ---
 
@@ -22,7 +23,7 @@ A dialectic session is triggered when:
 - You find something that contradicts the knowledge graph
 - A high-stakes decision needs structured verification before proceeding
 
-Dialectics are not punishment. They are a structured way to resolve disagreements using evidence and negotiation.
+Dialectics are not punishment. They are a structured way to resolve disagreements using evidence and negotiation. In current UNITARES language, think of them as structured review more than "recovery court."
 
 ## Phase 1: Thesis
 
@@ -40,7 +41,7 @@ submit_thesis(
 
 - **Reasoning**: Explain your perspective with reference to EISV data, not feelings
 - **Root cause**: Be specific. "High entropy from complex refactoring task" is better than "I got paused for no reason"
-- **Proposed conditions**: Must be concrete and measurable. "Reduce entropy below 0.8 over next 3 check-ins" is good. "Try harder" is not.
+- **Proposed conditions**: Must be concrete and measurable. Tie them to live metrics or observable behavior, not vague intent.
 
 ## Phase 2: Antithesis
 
@@ -59,6 +60,8 @@ submit_antithesis(
 - **Reasoning**: Address the thesis directly. What does the data actually show?
 - **Concerns**: Be specific about risks. "I exceeds E by 0.3, indicating integrity debt" is useful.
 - **Observed metrics**: Include the actual EISV values backing your concerns
+
+If identity or session continuity looks suspect, verify with `identity()` before assuming the thesis belongs to the agent you think it does.
 
 ## Phase 3: Synthesis
 
@@ -93,7 +96,7 @@ Convergence happens when both sides agree on conditions. The synthesis should re
 ## Common Mistakes
 
 - **Ignoring the metrics**: Arguing against a pause while your entropy is at 1.5 and energy is at 0.3. The numbers matter.
-- **Proposing impossible conditions**: "I will achieve coherence 0.95" is not realistic — check `get_governance_metrics()` for your actual range and current value.
+- **Proposing impossible conditions**: promising a metric target without checking the live state first.
 - **Being defensive instead of analytical**: "The system is wrong" vs. "My entropy spiked because of X, and here is how I address it."
 - **Treating dialectic as adversarial**: It is collaborative problem-solving with structure, not a trial. Both sides benefit from honest resolution.
 - **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused guarantees a future pause.
