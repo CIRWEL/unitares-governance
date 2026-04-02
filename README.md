@@ -12,7 +12,7 @@ Use it to:
 - inspect governance state and operator diagnostics
 - request dialectic review
 - work with the knowledge graph
-- adapt UNITARES workflows to Claude, Codex, and other clients
+- adapt UNITARES workflows to Codex, ChatGPT, Claude, and other clients
 
 ## What Lives Elsewhere
 
@@ -24,10 +24,16 @@ This repo should not duplicate server business logic or become the source of tru
 
 ## Current Adapters
 
+- Codex/ChatGPT adapter: plugin packaging plus shared skills and commands
 - Claude adapter: hooks, session helpers, and command docs
-- Codex adapter: plugin packaging plus shared skills and commands
 
 The shared value in this repo is the workflow guidance and client integration surface, not a second copy of the governance model.
+
+## Start Here
+
+If you are using ChatGPT or Codex, start with [CODEX_START.md](./CODEX_START.md).
+
+That path is now the preferred default. Claude hook automation remains supported, but it is no longer the canonical mental model for UNITARES usage.
 
 ## Core Workflow
 
@@ -94,7 +100,7 @@ The current Claude adapter includes session-start and post-edit hooks. Those hoo
 
 ### Codex
 
-Codex support should stay minimal and explicit:
+Codex and ChatGPT support should stay minimal and explicit:
 
 - package shared skills through `.codex-plugin/plugin.json`
 - expose manual commands
