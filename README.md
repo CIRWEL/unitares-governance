@@ -106,6 +106,7 @@ Codex and ChatGPT support should stay minimal and explicit:
 - package shared skills through `.codex-plugin/plugin.json`
 - expose manual commands
 - treat `.unitares/session.json` as the neutral local continuity cache
+- use `scripts/session_cache.py` as the shared cache helper across adapters
 - avoid client-specific auto-checkin behavior until there is a Codex-native reason to add it
 
 ## Non-Goals

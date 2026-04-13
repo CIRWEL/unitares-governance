@@ -4,6 +4,10 @@ description: "Show current UNITARES governance state and operator-relevant diagn
 
 Start by checking for `.unitares/session.json` in the current workspace.
 
+Use the shared helper in this plugin repo:
+
+- `scripts/session_cache.py get session`
+
 If continuity state exists:
 
 - prefer `continuity_token`

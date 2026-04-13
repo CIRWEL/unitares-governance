@@ -4,6 +4,10 @@ description: "Start or resume a UNITARES session in Codex and refresh local cont
 
 Start by checking for a local continuity cache in `.unitares/session.json` inside the current workspace.
 
+Use the shared helper in this plugin repo:
+
+- `scripts/session_cache.py get session`
+
 If the file exists:
 
 - read it
@@ -19,7 +23,7 @@ Then call `onboard()` against UNITARES:
 
 After a successful response:
 
-- create or update `.unitares/session.json`
+- create or update `.unitares/session.json` using `scripts/session_cache.py set session --merge --stamp`
 - keep it compact and machine-readable JSON
 - include:
   - `server_url` when known

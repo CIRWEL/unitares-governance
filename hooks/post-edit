@@ -5,12 +5,14 @@
 set -uo pipefail
 
 # ---------------------------------------------------------------------------
-# Read cached session
+# Resolve plugin root and verify session cache exists
 # ---------------------------------------------------------------------------
-SESSION_FILE="${PWD}/.claude/unitares-session.json"
-MILESTONE_FILE="${PWD}/.claude/unitares-last-edit.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [[ ! -f "${SESSION_FILE}" ]]; then
+SESSION_PAYLOAD=$(python3 "${PLUGIN_ROOT}/scripts/session_cache.py" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+
+if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
 
@@ -22,14 +24,12 @@ if [[ ! -t 0 ]]; then
   HOOK_INPUT=$(cat 2>/dev/null) || true
 fi
 
-python3 - "${HOOK_INPUT}" "${MILESTONE_FILE}" <<'PY' >/dev/null 2>&1 || true
+MILESTONE_PAYLOAD=$(python3 - "${HOOK_INPUT}" <<'PY' 2>/dev/null || true
 import json
-import os
 import sys
 import time
 
 raw = sys.argv[1] if len(sys.argv) > 1 else ""
-out = sys.argv[2] if len(sys.argv) > 2 else ""
 
 try:
     data = json.loads(raw) if raw else {}
@@ -44,11 +44,18 @@ payload = {
     "file_path": file_path,
     "event": "edit",
 }
-
-if out:
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+print(json.dumps(payload))
 PY
+)
+
+if [[ -z "${MILESTONE_PAYLOAD}" || "${MILESTONE_PAYLOAD}" == "{}" ]]; then
+  exit 0
+fi
+
+python3 "${PLUGIN_ROOT}/scripts/session_cache.py" \
+  set milestone \
+  --workspace "${PWD}" \
+  --stamp \
+  --json "${MILESTONE_PAYLOAD}" >/dev/null 2>&1 || true
 
 exit 0

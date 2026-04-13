@@ -185,13 +185,11 @@ SESSION_RESOLUTION_SOURCE=$(python3 -c "import json,sys; print(json.loads(sys.ar
 CONTINUITY_TOKEN_SUPPORTED=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['continuity_token_supported'])" "${AGENT_INFO}")
 
 # ---------------------------------------------------------------------------
-# Cache session to .claude/unitares-session.json
+# Cache session to .unitares/session.json via shared helper
 # ---------------------------------------------------------------------------
-SESSION_CACHE_DIR="${PWD}/.claude"
-mkdir -p "${SESSION_CACHE_DIR}"
-
-python3 -c "
+SESSION_CACHE_JSON=$(python3 -c "
 import json, sys
+parsed = json.loads(sys.argv[8]) if sys.argv[8] else {}
 cache = {
     'server_url': sys.argv[1],
     'agent_name': sys.argv[2],
@@ -199,11 +197,19 @@ cache = {
     'client_session_id': sys.argv[4],
     'continuity_token': sys.argv[5],
     'session_resolution_source': sys.argv[6],
-    'continuity_token_supported': sys.argv[7]
+    'continuity_token_supported': sys.argv[7],
+    'uuid': parsed.get('uuid'),
+    'display_name': parsed.get('display_name'),
 }
-with open(sys.argv[8], 'w') as f:
-    json.dump(cache, f, indent=2)
-" "${SERVER_URL}" "${AGENT_NAME}" "${AGENT_ID}" "${CLIENT_SESSION_ID}" "${CONTINUITY_TOKEN}" "${SESSION_RESOLUTION_SOURCE}" "${CONTINUITY_TOKEN_SUPPORTED}" "${SESSION_CACHE_DIR}/unitares-session.json"
+print(json.dumps(cache))
+" "${SERVER_URL}" "${AGENT_NAME}" "${AGENT_ID}" "${CLIENT_SESSION_ID}" "${CONTINUITY_TOKEN}" "${SESSION_RESOLUTION_SOURCE}" "${CONTINUITY_TOKEN_SUPPORTED}" "${ONBOARD_PARSED}")
+
+python3 "${PLUGIN_ROOT}/scripts/session_cache.py" \
+  set session \
+  --workspace "${PWD}" \
+  --merge \
+  --stamp \
+  --json "${SESSION_CACHE_JSON}" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # Fetch a light read of current state

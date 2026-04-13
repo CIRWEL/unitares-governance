@@ -44,6 +44,10 @@ Preferred cache path:
 
 - `.unitares/session.json`
 
+Shared helper:
+
+- `scripts/session_cache.py`
+
 Treat this as local runtime state. It should not be used as a source of truth over the server, but it is the first place to look for:
 
 - `continuity_token`

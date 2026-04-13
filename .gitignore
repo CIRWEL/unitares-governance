@@ -1,2 +1,3 @@
-# Session cache (created at runtime by SessionStart hook)
+# Session cache (created at runtime by adapters/hooks)
 .claude/
+.unitares/

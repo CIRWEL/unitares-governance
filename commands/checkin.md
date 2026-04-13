@@ -3,6 +3,10 @@ description: "Manual UNITARES governance check-in after meaningful work"
 
 Before calling tools, check for `.unitares/session.json` in the current workspace.
 
+Use the shared helper in this plugin repo:
+
+- `scripts/session_cache.py get session`
+
 If it exists:
 
 - prefer `continuity_token`
