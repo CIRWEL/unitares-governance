@@ -51,6 +51,7 @@ The principle is simple: prefer high-signal governance over high-frequency gover
 
 | Command | Description |
 |---------|-------------|
+| `/governance-start` | Start or resume a Codex/ChatGPT UNITARES session and refresh continuity state |
 | `/checkin` | Manual check-in after meaningful work |
 | `/diagnose` | Show current governance state plus identity/health diagnostics when needed |
 | `/dialectic` | Request a dialectic review |
@@ -104,6 +105,7 @@ Codex and ChatGPT support should stay minimal and explicit:
 
 - package shared skills through `.codex-plugin/plugin.json`
 - expose manual commands
+- treat `.unitares/session.json` as the neutral local continuity cache
 - avoid client-specific auto-checkin behavior until there is a Codex-native reason to add it
 
 ## Non-Goals
