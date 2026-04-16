@@ -73,26 +73,21 @@ def _post_json(url: str, payload: dict, timeout: float, token: str | None) -> di
 
 
 def _read_cache(workspace: Path, slot: str | None = None) -> dict:
-    """Read the cache for this slot, falling back to the legacy unslotted file.
+    """Read the cache for this slot. No cross-slot fallback.
 
-    Fallback exists so existing single-process flows (no slot supplied) keep
-    working unchanged, and so a slotted hook can still pick up continuity
-    state written by an earlier unslotted run.
+    Each slot (Claude Code session) gets its own identity. When no slot is
+    provided, reads the legacy unslotted file for backward compat.
+    A slotted session that has no cache yet returns {} — fresh onboard,
+    not inheritance from another session's identity.
     """
-    primary = workspace / CACHE_DIR / _slot_filename(slot)
-    candidates = [primary]
-    if slot:
-        candidates.append(workspace / CACHE_DIR / CACHE_FILE)
-    for path in candidates:
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if isinstance(data, dict) and data:
-            return data
-    return {}
+    path = workspace / CACHE_DIR / _slot_filename(slot)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _write_cache(workspace: Path, payload: dict, slot: str | None = None) -> None:

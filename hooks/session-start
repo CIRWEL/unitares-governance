@@ -308,6 +308,7 @@ ENDJSON
 fi
 
 # Onboard succeeded — extract fields for the rest of the script.
+AGENT_UUID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('uuid',''))" "${ONBOARD_RESULT}")
 AGENT_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('agent_id',''))" "${ONBOARD_RESULT}")
 CLIENT_SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('client_session_id',''))" "${ONBOARD_RESULT}")
 CONTINUITY_TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('continuity_token',''))" "${ONBOARD_RESULT}")
@@ -361,6 +362,7 @@ fi
 
 CONTEXT="UNITARES Governance: ONLINE
 Agent: ${AGENT_NAME} (${AGENT_ID_SNIPPET}...)
+UUID: ${AGENT_UUID}
 Session: ${CLIENT_SESSION_ID:0:12}..."
 
 if [[ -n "${EISV_SUMMARY}" ]]; then
@@ -368,20 +370,12 @@ if [[ -n "${EISV_SUMMARY}" ]]; then
 EISV: ${EISV_SUMMARY}"
 fi
 
-if [[ -n "${SESSION_RESOLUTION_SOURCE}" ]]; then
-  CONTEXT="${CONTEXT}
-Continuity: ${SESSION_RESOLUTION_SOURCE}"
-fi
-
-if [[ "${CONTINUITY_TOKEN_SUPPORTED}" == "True" || "${CONTINUITY_TOKEN_SUPPORTED}" == "true" ]]; then
-  CONTEXT="${CONTEXT}
-Continuity token: supported"
-fi
-
 # No force_new NOTE — force_new is never automatic. Trajectory failures
 # are surfaced as onboard_failed with clear recovery guidance.
 
 CONTEXT="${CONTEXT}
+
+On your first governance MCP tool call, pass agent_uuid=\"${AGENT_UUID}\" to bind your MCP session to this identity.
 
 Preferred workflow:
 - use meaningful check-ins, not per-edit check-ins
