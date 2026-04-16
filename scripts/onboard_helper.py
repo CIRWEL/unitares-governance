@@ -174,16 +174,41 @@ def run_onboard(
     url = f"{server_url.rstrip('/')}/v1/tools/call"
     cache = read_cache(workspace, slot)
 
+    # Fast path: UUID-direct resume (like SDK agents).
+    # If we have a cached UUID, call identity(agent_uuid=...) instead of
+    # going through the token/session resolution chain.
+    cached_uuid = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
+    if cached_uuid and not force_new:
+        raw = post_json(
+            url,
+            {"name": "identity", "arguments": {"agent_uuid": cached_uuid, "resume": True}},
+            timeout, auth_token,
+        )
+        parsed = unwrap_tool_response(raw)
+        if is_successful_onboard(parsed):
+            # UUID resume succeeded — update cache and return
+            new_cache = {
+                "server_url": server_url,
+                "agent_name": agent_name,
+                "slot": slot or "",
+                "uuid": parsed.get("uuid"),
+                "agent_id": parsed.get("agent_id") or parsed.get("resolved_agent_id") or "",
+                "client_session_id": parsed.get("client_session_id", ""),
+                "continuity_token": parsed.get("continuity_token", ""),
+                "session_resolution_source": parsed.get("session_resolution_source", ""),
+                "continuity_token_supported": parsed.get("continuity_token_supported", False),
+                "display_name": parsed.get("display_name", ""),
+            }
+            write_cache(workspace, new_cache, slot)
+            return {
+                "status": "ok",
+                **{k: v for k, v in new_cache.items() if k not in ("server_url", "slot")},
+            }
+        # UUID not found — fall through to fresh onboard
+
     arguments: dict[str, Any] = {"name": agent_name, "model_type": model_type}
     if force_new:
         arguments["force_new"] = True
-    else:
-        cached_token = (cache.get("continuity_token") or "").strip()
-        cached_session = (cache.get("client_session_id") or "").strip()
-        if cached_token:
-            arguments["continuity_token"] = cached_token
-        elif cached_session:
-            arguments["client_session_id"] = cached_session
 
     raw = post_json(url, {"name": "onboard", "arguments": arguments}, timeout, auth_token)
     parsed = unwrap_tool_response(raw)
