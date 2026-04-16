@@ -1,13 +1,13 @@
 {
   "name": "unitares-governance",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Governance client for UNITARES: onboarding, diagnostics, dialectic review, and knowledge graph guidance.",
   "author": {
     "name": "CIRWEL",
     "url": "https://github.com/CIRWEL"
   },
-  "homepage": "https://github.com/CIRWEL/unitares-governance",
-  "repository": "https://github.com/CIRWEL/unitares-governance",
+  "homepage": "https://github.com/CIRWEL/unitares-governance-plugin",
+  "repository": "https://github.com/CIRWEL/unitares-governance-plugin",
   "license": "MIT",
   "keywords": [
     "governance",
@@ -28,7 +28,7 @@
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://github.com/CIRWEL/unitares-governance",
+    "websiteURL": "https://github.com/CIRWEL/unitares-governance-plugin",
     "defaultPrompt": [
       "Start or resume my UNITARES session in Codex.",
       "Check me into UNITARES after this milestone.",
