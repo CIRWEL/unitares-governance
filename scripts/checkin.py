@@ -64,7 +64,19 @@ def _append_log(
         if latency_ms is not None:
             parts.append(f"latency_ms={latency_ms}")
         if error:
-            parts.append(f'err="{error[:120]}"')
+            # Strip anything that could corrupt the line-oriented log:
+            # newlines split a record in two, backslashes and quotes break the
+            # quoted-string shape. 120-char cap applied after sanitization so a
+            # long unicode sequence can't sneak past via the escape expansion.
+            safe_err = (
+                str(error)
+                .replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("|", "/")
+            )[:120]
+            parts.append(f'err="{safe_err}"')
         line = " | ".join(parts) + "\n"
         with path.open("a", encoding="utf-8") as f:
             f.write(line)
@@ -116,34 +128,31 @@ def submit_checkin(
     if _is_killed():
         _append_log(slot=slot, event=event, uuid=uuid, status="skip_kill_switch")
         return "skip_kill_switch"
-
-    safe_text = redact_secrets(response_text)[:RESPONSE_TEXT_MAX]
-    url = server_url or os.environ.get("UNITARES_SERVER_URL", DEFAULT_SERVER_URL)
-
-    payload = {
-        "name": "process_agent_update",
-        "arguments": {
-            "response_text": safe_text,
-            "complexity": max(0.0, min(1.0, float(complexity))),
-            "confidence": max(0.0, min(1.0, float(confidence))),
-            "client_session_id": client_session_id,
-            "continuity_token": continuity_token,
-            "metadata": {
-                "source": "plugin_hook",
-                "event": event,
-                "plugin_version": plugin_version,
+    try:
+        safe_text = redact_secrets(response_text)[:RESPONSE_TEXT_MAX]
+        url = server_url or os.environ.get("UNITARES_SERVER_URL", DEFAULT_SERVER_URL)
+        payload = {
+            "name": "process_agent_update",
+            "arguments": {
+                "response_text": safe_text,
+                "complexity": max(0.0, min(1.0, float(complexity))),
+                "confidence": max(0.0, min(1.0, float(confidence))),
+                "client_session_id": client_session_id,
+                "continuity_token": continuity_token,
+                "metadata": {
+                    "source": "plugin_hook",
+                    "event": event,
+                    "plugin_version": plugin_version,
+                },
             },
-        },
-    }
-
-    ok, latency_ms, err = _post_to_governance(url, payload)
-    status = "sent" if ok else "fail"
-    _append_log(
-        slot=slot,
-        event=event,
-        uuid=uuid,
-        status=status,
-        latency_ms=latency_ms,
-        error=err,
-    )
-    return status
+        }
+        ok, latency_ms, err = _post_to_governance(url, payload)
+        status = "sent" if ok else "fail"
+        _append_log(
+            slot=slot, event=event, uuid=uuid, status=status,
+            latency_ms=latency_ms, error=err,
+        )
+        return status
+    except Exception as e:
+        _append_log(slot=slot, event=event, uuid=uuid, status="error", error=str(e))
+        return "error"

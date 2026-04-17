@@ -59,3 +59,70 @@ def test_kill_switch_default_on(monkeypatch, tmp_path):
 
     assert result == "sent"
     mock_post.assert_called_once()
+
+
+def test_submit_checkin_never_raises_on_garbage_inputs(monkeypatch, tmp_path):
+    """The 'never raises' contract holds for garbage inputs.
+
+    Hook authors may feed env-var strings, None, or bytes through these
+    parameters. submit_checkin must return a status string, never raise.
+    """
+    log_path = tmp_path / "checkins.log"
+    monkeypatch.setenv("UNITARES_CHECKIN_LOG", str(log_path))
+
+    # None for numeric fields — float(None) raises TypeError
+    with patch("checkin._post_to_governance", return_value=(True, 1, None)):
+        result = checkin.submit_checkin(
+            event="turn_stop",
+            response_text="x",
+            complexity=None,  # type: ignore[arg-type]
+            confidence=None,  # type: ignore[arg-type]
+            client_session_id="agent-x",
+            continuity_token="v1.t",
+            slot="s",
+        )
+    assert result == "error"
+
+    # Non-string response_text — redact_secrets' re.sub raises TypeError on bytes
+    with patch("checkin._post_to_governance", return_value=(True, 1, None)):
+        result = checkin.submit_checkin(
+            event="turn_stop",
+            response_text=b"x",  # type: ignore[arg-type]
+            complexity=0.3,
+            confidence=0.7,
+            client_session_id="agent-x",
+            continuity_token="v1.t",
+            slot="s",
+        )
+    assert result == "error"
+
+    # Log should have two 'status=error' lines
+    lines = log_path.read_text().strip().splitlines()
+    assert sum(1 for l in lines if "status=error" in l) == 2
+
+
+def test_log_format_resilient_to_pathological_error_text(monkeypatch, tmp_path):
+    """Newlines, quotes, pipes, backslashes in error text do not corrupt the log."""
+    log_path = tmp_path / "checkins.log"
+    monkeypatch.setenv("UNITARES_CHECKIN_LOG", str(log_path))
+
+    pathological = 'line1\nline2 | "quoted" \\escaped\\ \rcr'
+    with patch("checkin._post_to_governance", return_value=(False, 99, pathological)):
+        checkin.submit_checkin(
+            event="turn_stop",
+            response_text="x",
+            complexity=0.3,
+            confidence=0.7,
+            client_session_id="agent-x",
+            continuity_token="v1.t",
+            slot="s",
+        )
+
+    content = log_path.read_text()
+    # Exactly one line — the error must not have split the record.
+    assert content.count("\n") == 1
+    # No raw double-quote mid-line (the escaped form is `\"`)
+    raw_line = content.strip()
+    # Count of unescaped double-quotes should be exactly 2 (opening + closing of err=".."))
+    # Backslash before each internal quote
+    assert raw_line.count('\\"') == 2  # both original quotes survived escaped
