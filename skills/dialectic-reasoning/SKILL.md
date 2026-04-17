@@ -4,12 +4,12 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-03-20"
+last_verified: "2026-04-17"
 freshness_days: 14
 source_files:
-  - governance-mcp-v1/src/mcp_handlers/dialectic/handlers.py
-  - governance-mcp-v1/src/mcp_handlers/dialectic/session.py
-  - governance-mcp-v1/config/governance_config.py
+  - unitares/src/mcp_handlers/dialectic/handlers.py
+  - unitares/src/mcp_handlers/dialectic/session.py
+  - unitares/config/governance_config.py
 ---
 
 # Dialectic Reasoning

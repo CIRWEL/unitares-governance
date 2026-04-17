@@ -4,30 +4,41 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-03-20"
+last_verified: "2026-04-17"
 freshness_days: 14
 source_files:
-  - governance-mcp-v1/src/mcp_handlers/core.py
-  - governance-mcp-v1/src/mcp_handlers/identity/handlers.py
-  - governance-mcp-v1/src/mcp_handlers/admin/handlers.py
+  - unitares/src/mcp_handlers/core.py
+  - unitares/src/mcp_handlers/identity/handlers.py
+  - unitares/src/mcp_handlers/admin/handlers.py
 ---
 
 # Agent Lifecycle
 
 ## Starting a Session
 
-Call `onboard()` to register or reconnect:
+Call `onboard()` to register a fresh identity, or `identity(agent_uuid=..., resume=true)` to resume a stored one:
 
 ```
-onboard(name, model_type)
+onboard(name, model_type)                        # always creates a fresh UUID
+identity(agent_uuid="<saved-uuid>", resume=true) # resume an existing identity
 ```
 
 Returns:
-- **UUID**: Your persistent identity across sessions
-- **client_session_id**: Echo this back in subsequent calls for session continuity
+- **UUID**: Your persistent identity — save this to resume later
+- **client_session_id**: Echo this back in subsequent calls for session continuity within the same process
 - **continuity metadata**: Newer runtimes may also return `continuity_token_supported` and session-resolution diagnostics
 
 If the runtime supports a continuity token, prefer it. Otherwise always echo `client_session_id`.
+
+### Resuming vs. creating new (updated 2026-04-17)
+
+`name=` is a **cosmetic label**, not a resume key. Since the 2026-04-17 name-claim removal, passing `name="Same-Agent"` on a fresh session always mints a new UUID — it will not re-bind to an existing agent with that label. Resume signals, in strength order:
+
+1. **`agent_uuid`** (PATH 0) — strongest. Always works if the agent is active. Save this from your first `onboard()` and pass it on every subsequent `identity(agent_uuid=..., resume=true)`.
+2. **`continuity_token`** (PATH 2.8) — strong. Expires; rebinds even across session-cache invalidation.
+3. **Active session binding** (PATH 1/2) — auto-handled by the server when you reuse the same transport session.
+
+Without any of these, you are a new agent. That is the correct semantic, not a bug.
 
 ## Check-ins
 
