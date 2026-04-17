@@ -121,6 +121,72 @@ def cmd_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+# Per-workspace cap on how many distinct file paths we remember in the
+# milestone accumulator. The accumulator exists so auto-checkin can report a
+# concrete file list; beyond ~20 entries the summary becomes noise and the
+# cache starts growing unbounded in long-running sessions.
+MILESTONE_FILE_CAP = 20
+
+
+def cmd_bump_edit(args: argparse.Namespace) -> int:
+    """Append an edit event to the milestone accumulator.
+
+    Increments edit_count, dedupes file_path into files_touched (capped),
+    stamps first_edit_ts on the first bump since reset, and always refreshes
+    last_edit_ts + updated_at. Backwards-compatible keys (event, file_path,
+    timestamp) are preserved so existing readers keep working.
+    """
+    workspace = _workspace_path(args.workspace)
+    path = _cache_path("milestone", workspace)
+    existing = _read_json(path)
+
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing["edit_count"] = int(existing.get("edit_count") or 0) + 1
+    if not existing.get("first_edit_ts"):
+        existing["first_edit_ts"] = now_epoch
+    existing["last_edit_ts"] = now_epoch
+    existing["updated_at"] = now_iso
+
+    files = existing.get("files_touched")
+    if not isinstance(files, list):
+        files = []
+    fp = (args.file_path or "").strip()
+    if fp and fp not in files:
+        files.append(fp)
+        if len(files) > MILESTONE_FILE_CAP:
+            files = files[-MILESTONE_FILE_CAP:]
+    existing["files_touched"] = files
+
+    # Legacy shape — keep for readers that predate the accumulator.
+    existing.setdefault("event", "edit")
+    if fp:
+        existing["file_path"] = fp
+    existing["timestamp"] = now_epoch
+
+    _write_json(path, existing)
+    if args.echo:
+        print(json.dumps(existing))
+    return 0
+
+
+def cmd_reset_milestone(args: argparse.Namespace) -> int:
+    """Reset the milestone accumulator after a successful check-in."""
+    workspace = _workspace_path(args.workspace)
+    path = _cache_path("milestone", workspace)
+    existing = _read_json(path)
+    existing["edit_count"] = 0
+    existing["files_touched"] = []
+    existing["first_edit_ts"] = None
+    existing["last_edit_ts"] = None
+    existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_json(path, existing)
+    if args.echo:
+        print(json.dumps(existing))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -149,6 +215,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_clear.add_argument("kind", choices=sorted(CACHE_FILES))
     p_clear.add_argument("--workspace")
     p_clear.set_defaults(func=cmd_clear)
+
+    p_bump = sub.add_parser(
+        "bump-edit",
+        help="Append an edit event to the milestone accumulator",
+    )
+    p_bump.add_argument("--workspace")
+    p_bump.add_argument("--file-path", default="")
+    p_bump.add_argument("--echo", action="store_true")
+    p_bump.set_defaults(func=cmd_bump_edit)
+
+    p_reset = sub.add_parser(
+        "reset-milestone",
+        help="Reset the milestone accumulator after a check-in",
+    )
+    p_reset.add_argument("--workspace")
+    p_reset.add_argument("--echo", action="store_true")
+    p_reset.set_defaults(func=cmd_reset_milestone)
 
     return parser
 

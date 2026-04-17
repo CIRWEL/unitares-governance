@@ -1,11 +1,32 @@
 #!/usr/bin/env bash
 # UNITARES Governance Plugin — PostToolUse hook (Edit/Write)
-# Local milestone capture plus optional workspace-local watcher trigger.
+#
+# Responsibilities (in order):
+#   1. Fan edit event out to an optional workspace-local watcher hook.
+#   2. Bump the milestone accumulator (edit_count, files_touched, timestamps).
+#   3. If edit_count or elapsed-since-last-checkin crosses a threshold, fire
+#      process_agent_update against the governance server as a hook-driven
+#      auto-checkin, then reset the accumulator.
+#
+# This revives the auto-checkin behavior that existed before commit e46f25d
+# ("Align plugin with Codex packaging and runtime semantics"). That refactor
+# stripped the per-edit curl but never replaced the forcing function, which
+# left Claude in the same explicit-only mode as Codex even though Claude can
+# drive richer hook behavior. Codex keeps its /checkin workflow untouched.
+#
+# Config (all optional):
+#   UNITARES_AUTO_CHECKIN_ENABLED=0   — disable auto-checkin entirely
+#   UNITARES_AUTO_CHECKIN_EDITS=5     — fire after N edits since last checkin
+#   UNITARES_AUTO_CHECKIN_SECS=600    — fire after T seconds since last checkin
+#                                       (combined with edit_count >= 1)
+#   UNITARES_WATCHER_HOOK=<path>      — custom watcher hook path
+#   UNITARES_WATCHER_ENABLED=0        — disable watcher fan-out
+#
 # Runs async — must never block or produce output on failure.
 set -uo pipefail
 
 # ---------------------------------------------------------------------------
-# Resolve plugin root and current helper paths
+# Resolve plugin root and helpers
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -21,6 +42,27 @@ do
   fi
 done
 
+DEFAULTS_FILE=""
+for candidate in \
+  "${PLUGIN_ROOT}/config/defaults.env" \
+  "${PLUGIN_ROOT}/config/client/defaults.env"
+do
+  if [[ -f "${candidate}" ]]; then
+    DEFAULTS_FILE="${candidate}"
+    break
+  fi
+done
+
+SERVER_URL_OVERRIDE="${UNITARES_SERVER_URL-}"
+if [[ -n "${DEFAULTS_FILE}" ]]; then
+  # shellcheck source=/dev/null
+  source "${DEFAULTS_FILE}" 2>/dev/null || true
+fi
+if [[ -n "${SERVER_URL_OVERRIDE}" ]]; then
+  UNITARES_SERVER_URL="${SERVER_URL_OVERRIDE}"
+fi
+SERVER_URL="${UNITARES_SERVER_URL:-http://localhost:8767}"
+
 # ---------------------------------------------------------------------------
 # Read hook input from stdin (Claude passes tool info as JSON)
 # ---------------------------------------------------------------------------
@@ -30,56 +72,153 @@ if [[ ! -t 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Optional local watcher: if the workspace ships its own watcher hook, fan out
-# the same edit event without blocking the primary milestone cache path.
+# Optional workspace-local watcher fan-out
 # ---------------------------------------------------------------------------
 WATCHER_HOOK="${UNITARES_WATCHER_HOOK:-${PWD}/agents/watcher/watcher-hook.sh}"
 if [[ "${UNITARES_WATCHER_ENABLED:-1}" != "0" && -x "${WATCHER_HOOK}" && -n "${HOOK_INPUT}" ]]; then
   printf '%s' "${HOOK_INPUT}" | "${WATCHER_HOOK}" >/dev/null 2>&1 &
 fi
 
+# ---------------------------------------------------------------------------
+# Require the session cache helper + an active session to do anything else
+# ---------------------------------------------------------------------------
 if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
   exit 0
 fi
 
 SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
-
 if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
 
-MILESTONE_PAYLOAD=$(python3 - "${HOOK_INPUT}" <<'PY' 2>/dev/null || true
-import json
-import sys
-import time
-
+# ---------------------------------------------------------------------------
+# Extract file_path from the Edit/Write tool payload
+# ---------------------------------------------------------------------------
+FILE_PATH=$(python3 - "${HOOK_INPUT}" <<'PY' 2>/dev/null || true
+import json, sys
 raw = sys.argv[1] if len(sys.argv) > 1 else ""
-
 try:
     data = json.loads(raw) if raw else {}
 except Exception:
     data = {}
-
 tool_input = data.get("tool_input", data.get("input", data))
-file_path = tool_input.get("file_path", tool_input.get("path", ""))
-
-payload = {
-    "timestamp": int(time.time()),
-    "file_path": file_path,
-    "event": "edit",
-}
-print(json.dumps(payload))
+print(tool_input.get("file_path", tool_input.get("path", "")))
 PY
 )
+
+# ---------------------------------------------------------------------------
+# Bump the milestone accumulator (always — this is what /checkin summarizes)
+# ---------------------------------------------------------------------------
+MILESTONE_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" \
+  bump-edit \
+  --workspace "${PWD}" \
+  --file-path "${FILE_PATH}" \
+  --echo 2>/dev/null || echo "{}")
 
 if [[ -z "${MILESTONE_PAYLOAD}" || "${MILESTONE_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
 
-python3 "${SESSION_CACHE_HELPER}" \
-  set milestone \
-  --workspace "${PWD}" \
-  --stamp \
-  --json "${MILESTONE_PAYLOAD}" >/dev/null 2>&1 || true
+# ---------------------------------------------------------------------------
+# Auto-checkin decision
+# ---------------------------------------------------------------------------
+if [[ "${UNITARES_AUTO_CHECKIN_ENABLED:-1}" == "0" ]]; then
+  exit 0
+fi
+
+EDIT_THRESHOLD="${UNITARES_AUTO_CHECKIN_EDITS:-5}"
+SECS_THRESHOLD="${UNITARES_AUTO_CHECKIN_SECS:-600}"
+
+DECISION_HELPER=""
+for candidate in \
+  "${PLUGIN_ROOT}/scripts/auto_checkin_decision.py" \
+  "${PLUGIN_ROOT}/scripts/client/auto_checkin_decision.py"
+do
+  if [[ -f "${candidate}" ]]; then
+    DECISION_HELPER="${candidate}"
+    break
+  fi
+done
+
+if [[ -z "${DECISION_HELPER}" ]]; then
+  exit 0
+fi
+
+DECISION=$(python3 "${DECISION_HELPER}" \
+  --session-json "${SESSION_PAYLOAD}" \
+  --milestone-json "${MILESTONE_PAYLOAD}" \
+  --edit-threshold "${EDIT_THRESHOLD}" \
+  --secs-threshold "${SECS_THRESHOLD}" 2>/dev/null || echo "{}")
+
+FIRE=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('fire', False))" "${DECISION}" 2>/dev/null || echo "False")
+if [[ "${FIRE}" != "True" ]]; then
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Fire process_agent_update
+# ---------------------------------------------------------------------------
+CONTINUITY_TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('continuity_token',''))" "${DECISION}" 2>/dev/null || echo "")
+CLIENT_SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('client_session_id',''))" "${DECISION}" 2>/dev/null || echo "")
+RESPONSE_TEXT=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('response_text',''))" "${DECISION}" 2>/dev/null || echo "")
+COMPLEXITY=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('complexity',0.3))" "${DECISION}" 2>/dev/null || echo "0.3")
+
+if [[ -z "${CONTINUITY_TOKEN}" && -z "${CLIENT_SESSION_ID}" ]]; then
+  exit 0
+fi
+
+# Build the arguments JSON with whichever session token we have. Prefer the
+# continuity_token since the server treats it as a strong-identity source.
+ARGS_JSON=$(python3 - "${CONTINUITY_TOKEN}" "${CLIENT_SESSION_ID}" "${RESPONSE_TEXT}" "${COMPLEXITY}" <<'PY' 2>/dev/null
+import json, sys
+ct, csid, text, comp = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+args = {
+    "response_text": text,
+    "complexity": float(comp) if comp else 0.3,
+    "task_type": "mixed",
+}
+if ct:
+    args["continuity_token"] = ct
+elif csid:
+    args["client_session_id"] = csid
+print(json.dumps(args))
+PY
+)
+
+if [[ -z "${ARGS_JSON}" ]]; then
+  exit 0
+fi
+
+curl_args=(
+  -s
+  --max-time 5
+  -o /dev/null
+  -w "%{http_code}"
+  -X POST "${SERVER_URL}/v1/tools/call"
+  -H "Content-Type: application/json"
+)
+if [[ -n "${UNITARES_HTTP_API_TOKEN:-}" ]]; then
+  curl_args+=(-H "Authorization: Bearer ${UNITARES_HTTP_API_TOKEN}")
+fi
+
+HTTP_CODE=$(curl "${curl_args[@]}" \
+  -d "{\"name\": \"process_agent_update\", \"arguments\": ${ARGS_JSON}}" 2>/dev/null || echo "000")
+
+# Reset the accumulator + stamp last_checkin_ts only on a clean 2xx. Anything
+# else leaves the counters intact so the next edit re-evaluates the threshold
+# instead of silently dropping the attempted check-in.
+if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
+  python3 "${SESSION_CACHE_HELPER}" \
+    reset-milestone \
+    --workspace "${PWD}" >/dev/null 2>&1 || true
+
+  NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
+  python3 "${SESSION_CACHE_HELPER}" \
+    set session \
+    --workspace "${PWD}" \
+    --merge \
+    --stamp \
+    --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+fi
 
 exit 0

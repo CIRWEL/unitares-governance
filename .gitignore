@@ -1,3 +1,8 @@
 # Session cache (created at runtime by adapters/hooks)
 .claude/
 .unitares/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
