@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — SessionEnd hook
+#
+# Fires when the Claude Code session terminates (window close, etc).
+# Posts a final session_end check-in. Synchronous — session may be
+# closing abruptly, and we want the POST to land before the process
+# exits. 5s POST timeout in checkin.py bounds the wait. `|| true`
+# ensures failure doesn't propagate.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+SESSION_FILE="${PWD}/.unitares/session.json"
+[[ ! -f "${SESSION_FILE}" ]] && SESSION_FILE="${HOME}/.unitares/session.json"
+[[ ! -f "${SESSION_FILE}" ]] && exit 0
+
+UUID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('uuid',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
+CSID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('client_session_id',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
+TOK=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('continuity_token',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
+SLOT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('slot','default'))" "${SESSION_FILE}" 2>/dev/null || echo "default")
+
+[[ -z "${CSID}" ]] && exit 0
+
+# Tally check-ins posted this session from the log (best effort).
+LOG="${UNITARES_CHECKIN_LOG:-${HOME}/.unitares/checkins.log}"
+COUNT=0
+if [[ -f "${LOG}" ]]; then
+  COUNT=$(grep -c "slot=${SLOT}" "${LOG}" 2>/dev/null || echo "0")
+fi
+
+SUMMARY="Session ended: ${COUNT} check-ins posted this session"
+
+python3 "${PLUGIN_ROOT}/scripts/checkin.py" \
+  --event session_end \
+  --response-text "${SUMMARY}" \
+  --complexity 0.1 \
+  --confidence 0.9 \
+  --client-session-id "${CSID}" \
+  --continuity-token "${TOK}" \
+  --uuid "${UUID}" \
+  --slot "${SLOT}" \
+  >/dev/null 2>&1 || true
+
+exit 0
