@@ -118,6 +118,49 @@ This repo should not:
 - auto-checkin every trivial file write by default
 - override runtime verdicts locally
 
+## Check-In Triggers
+
+The plugin emits `process_agent_update` calls at four trigger points:
+
+| Trigger | Hook script | Frequency | `metadata.event` |
+|---|---|---|---|
+| Session starts | `session-start` | once per session | `session_start` |
+| Claude turn ends | `post-stop` | per Claude turn | `turn_stop` |
+| Edit threshold crossed | `post-edit` | every N edits or T seconds | `auto_edit` |
+| Session closes | `session-end` | once per session | `session_end` |
+
+All emissions share one shared helper (`scripts/checkin.py`) that:
+- Applies secret-pattern redaction to `response_text` before POST
+- Truncates `response_text` to 512 chars
+- Logs one status line per attempt to `~/.unitares/checkins.log`
+- Returns fire-and-forget: never raises, never blocks a Claude turn on failure
+
+### Kill switch
+
+`UNITARES_CHECKINS=off` in the environment suppresses every plugin-emitted
+check-in. Disable a single trigger by removing its entry from
+`hooks/hooks.json`.
+
+### Diagnosing check-in behavior
+
+```bash
+tail -f ~/.unitares/checkins.log
+```
+
+Expected line format:
+```
+2026-04-17T02:45:12Z | slot=abc12345 | event=turn_stop | uuid=86ae619f | status=sent | latency_ms=42
+```
+
+Statuses: `sent` (accepted by governance), `fail` (POST failed — see `err=...`), `skip_kill_switch` (suppressed by `UNITARES_CHECKINS=off`), `error` (client-side exception; caller passed garbage values).
+
+### Known limitation
+
+The edit-threshold auto-checkin previously supported `UNITARES_HTTP_API_TOKEN`
+for Bearer-token auth against remote governance. The refactored helper uses
+stdlib urllib and does not pass this header. Local-only deployments (the
+supported default) are unaffected.
+
 ## Development Workflow
 
 Use a lightweight branch and PR flow for normal changes:
