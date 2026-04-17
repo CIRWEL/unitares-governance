@@ -1,0 +1,149 @@
+"""Shared check-in helper for UNITARES governance plugin hooks.
+
+One entry point: ``submit_checkin``. Builds a ``process_agent_update``
+REST payload, applies secret redaction, POSTs to the governance server,
+and appends one diagnostic line to ``UNITARES_CHECKIN_LOG``.
+
+Fire-and-forget semantics: never raises, always returns a status string
+that callers may record. The kill switch ``UNITARES_CHECKINS=off``
+short-circuits every call.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from _redact import redact_secrets
+
+DEFAULT_SERVER_URL = "http://localhost:8767"
+DEFAULT_LOG_PATH = "~/.unitares/checkins.log"
+POST_TIMEOUT_SEC = 5.0
+RESPONSE_TEXT_MAX = 512
+
+
+def _is_killed() -> bool:
+    return os.environ.get("UNITARES_CHECKINS", "on").strip().lower() == "off"
+
+
+def _log_path() -> Path:
+    raw = os.environ.get("UNITARES_CHECKIN_LOG", DEFAULT_LOG_PATH)
+    return Path(raw).expanduser()
+
+
+def _append_log(
+    *,
+    slot: str,
+    event: str,
+    uuid: str,
+    status: str,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Append one line to the diagnostic log. Never raises."""
+    try:
+        path = _log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        parts = [
+            stamp,
+            f"slot={slot}",
+            f"event={event}",
+            f"uuid={uuid[:8] if uuid else '?'}",
+            f"status={status}",
+        ]
+        if latency_ms is not None:
+            parts.append(f"latency_ms={latency_ms}")
+        if error:
+            parts.append(f'err="{error[:120]}"')
+        line = " | ".join(parts) + "\n"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        # Logging failures are swallowed — we must not break the hook.
+        pass
+
+
+def _post_to_governance(
+    url: str,
+    payload: dict,
+    timeout: float = POST_TIMEOUT_SEC,
+) -> tuple[bool, int, Optional[str]]:
+    """POST payload to /v1/tools/call. Returns (success, latency_ms, err_text)."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{url}/v1/tools/call",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()  # drain
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return True, latency_ms, None
+    except urllib.error.URLError as e:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return False, latency_ms, str(getattr(e, "reason", e))
+    except Exception as e:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return False, latency_ms, str(e)
+
+
+def submit_checkin(
+    *,
+    event: str,
+    response_text: str,
+    complexity: float,
+    confidence: float,
+    client_session_id: str,
+    continuity_token: str,
+    slot: str,
+    uuid: str = "",
+    server_url: Optional[str] = None,
+    plugin_version: str = "0.3.0",
+) -> str:
+    """Send one check-in. Returns a status string suitable for logging."""
+    if _is_killed():
+        _append_log(slot=slot, event=event, uuid=uuid, status="skip_kill_switch")
+        return "skip_kill_switch"
+
+    safe_text = redact_secrets(response_text)[:RESPONSE_TEXT_MAX]
+    url = server_url or os.environ.get("UNITARES_SERVER_URL", DEFAULT_SERVER_URL)
+
+    payload = {
+        "name": "process_agent_update",
+        "arguments": {
+            "response_text": safe_text,
+            "complexity": max(0.0, min(1.0, float(complexity))),
+            "confidence": max(0.0, min(1.0, float(confidence))),
+            "client_session_id": client_session_id,
+            "continuity_token": continuity_token,
+            "metadata": {
+                "source": "plugin_hook",
+                "event": event,
+                "plugin_version": plugin_version,
+            },
+        },
+    }
+
+    ok, latency_ms, err = _post_to_governance(url, payload)
+    status = "sent" if ok else "fail"
+    _append_log(
+        slot=slot,
+        event=event,
+        uuid=uuid,
+        status=status,
+        latency_ms=latency_ms,
+        error=err,
+    )
+    return status
