@@ -1,0 +1,77 @@
+"""Contract test: Stop hook fires exactly one turn_stop check-in."""
+
+from __future__ import annotations
+
+import json
+import socketserver
+import subprocess
+import threading
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).parent.parent
+
+# Reuse mock server + reusable TCP subclass from the session-start test file.
+from tests.test_session_start_checkin import RecordingHandler, _ReusableTCPServer  # noqa: E402
+
+
+def test_post_stop_emits_turn_stop_checkin(tmp_path):
+    """post-stop hook posts a check-in with event='turn_stop'."""
+    RecordingHandler.calls = []
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    # Pre-populate session cache with a fake session file in $PWD/.unitares
+    session_dir = tmp_path / ".unitares"
+    session_dir.mkdir()
+    (session_dir / "session.json").write_text(json.dumps({
+        "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
+        "client_session_id": "agent-test1234",
+        "continuity_token": "v1.faketoken",
+        "slot": "test-slot",
+    }))
+
+    # Minimal Stop hook payload: tool_calls list + final_text
+    stop_payload = json.dumps({
+        "hook_event_name": "Stop",
+        "tool_calls": [
+            {"name": "Read"}, {"name": "Edit"}, {"name": "Bash"}
+        ],
+        "final_text": "Completed the refactor; all tests pass.",
+    })
+
+    try:
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+            "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "PWD": str(tmp_path),
+        }
+        hook = PLUGIN_ROOT / "hooks" / "post-stop"
+        subprocess.run(
+            [str(hook)],
+            env=env,
+            input=stop_payload,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+    checkins = [
+        c for c in RecordingHandler.calls
+        if c.get("name") == "process_agent_update"
+        and c["arguments"].get("metadata", {}).get("event") == "turn_stop"
+    ]
+    assert len(checkins) == 1, (
+        f"expected exactly 1 turn_stop check-in; got {len(checkins)}: "
+        f"{[c.get('name') for c in RecordingHandler.calls]}"
+    )
+    text = checkins[0]["arguments"]["response_text"]
+    assert "3 tool call" in text
+    assert "Completed the refactor" in text

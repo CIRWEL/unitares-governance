@@ -1,0 +1,54 @@
+"""Contract test: SessionEnd hook emits a session_end check-in."""
+
+from __future__ import annotations
+
+import json
+import socketserver
+import subprocess
+import threading
+from pathlib import Path
+
+PLUGIN_ROOT = Path(__file__).parent.parent
+
+# Reuse mock server + reusable TCP subclass from the session-start test file.
+from tests.test_session_start_checkin import RecordingHandler, _ReusableTCPServer  # noqa: E402
+
+
+def test_session_end_emits_checkin(tmp_path):
+    """session-end hook posts a check-in with event='session_end'."""
+    RecordingHandler.calls = []
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    session_dir = tmp_path / ".unitares"
+    session_dir.mkdir()
+    (session_dir / "session.json").write_text(json.dumps({
+        "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
+        "client_session_id": "agent-test1234",
+        "continuity_token": "v1.tok",
+        "slot": "test-slot",
+    }))
+
+    try:
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+            "UNITARES_CHECKIN_LOG": str(tmp_path / "cl.log"),
+            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "PWD": str(tmp_path),
+        }
+        hook = PLUGIN_ROOT / "hooks" / "session-end"
+        subprocess.run([str(hook)], env=env, timeout=15, check=False)
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+    events = [
+        c["arguments"]["metadata"]["event"]
+        for c in RecordingHandler.calls
+        if c.get("name") == "process_agent_update"
+    ]
+    assert "session_end" in events

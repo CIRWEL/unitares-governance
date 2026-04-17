@@ -86,7 +86,25 @@ if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
   exit 0
 fi
 
-SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+# Resolve slot-aware session cache via shared helper. HOOK_INPUT already
+# captured from stdin above — its session_id field is the slot key.
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+if [[ -f "${SESSION_LOOKUP}" ]]; then
+  # Load the full slotted session JSON for auto_checkin_decision, which needs
+  # continuity_token, client_session_id, and last_checkin_ts from the cache.
+  SESSION_PAYLOAD=$(printf '%s' "${HOOK_INPUT}" | python3 -c "
+import json, sys
+sys.path.insert(0, '${PLUGIN_ROOT}/scripts')
+from _session_lookup import load_session_for_hook
+data = load_session_for_hook('${PWD}', sys.stdin.read())
+print(json.dumps(data))
+" 2>/dev/null || echo "{}")
+  # Also eval shell vars for UUID_HINT and SLOT (needed by checkin.py call).
+  eval "$(printf '%s' "${HOOK_INPUT}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}" 2>/dev/null || true)"
+else
+  SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+fi
+
 if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
@@ -156,7 +174,9 @@ if [[ "${FIRE}" != "True" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Fire process_agent_update
+# Fire process_agent_update — routes through scripts/checkin.py so it gets
+# redaction, logging, the kill switch, and metadata tagging on equal footing
+# with session-start/stop/end check-ins.
 # ---------------------------------------------------------------------------
 CONTINUITY_TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('continuity_token',''))" "${DECISION}" 2>/dev/null || echo "")
 CLIENT_SESSION_ID=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('client_session_id',''))" "${DECISION}" 2>/dev/null || echo "")
@@ -167,58 +187,41 @@ if [[ -z "${CONTINUITY_TOKEN}" && -z "${CLIENT_SESSION_ID}" ]]; then
   exit 0
 fi
 
-# Build the arguments JSON with whichever session token we have. Prefer the
-# continuity_token since the server treats it as a strong-identity source.
-ARGS_JSON=$(python3 - "${CONTINUITY_TOKEN}" "${CLIENT_SESSION_ID}" "${RESPONSE_TEXT}" "${COMPLEXITY}" <<'PY' 2>/dev/null
-import json, sys
-ct, csid, text, comp = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-args = {
-    "response_text": text,
-    "complexity": float(comp) if comp else 0.3,
-    "task_type": "mixed",
-}
-if ct:
-    args["continuity_token"] = ct
-elif csid:
-    args["client_session_id"] = csid
-print(json.dumps(args))
-PY
-)
+# Pull uuid + slot from the session-lookup eval above (slotted cache).
+# Fall back to "default" / "" if the eval didn't produce them.
+SLOT="${SLOT:-default}"
+UUID_HINT="${UUID:-}"
 
-if [[ -z "${ARGS_JSON}" ]]; then
-  exit 0
-fi
+# NOTE: The previous inline curl supported UNITARES_HTTP_API_TOKEN as a Bearer
+# token; scripts/checkin.py does not (yet). Local deployments — the only
+# supported configuration today — do not use API-token auth, so this is not
+# a regression in practice. Add --bearer-token support to checkin.py if
+# token-authenticated governance endpoints are needed in the future.
+python3 "${PLUGIN_ROOT}/scripts/checkin.py" \
+  --event auto_edit \
+  --response-text "${RESPONSE_TEXT}" \
+  --complexity "${COMPLEXITY}" \
+  --confidence 0.6 \
+  --client-session-id "${CLIENT_SESSION_ID}" \
+  --continuity-token "${CONTINUITY_TOKEN}" \
+  --uuid "${UUID_HINT}" \
+  --slot "${SLOT}" \
+  >/dev/null 2>&1 || true
 
-curl_args=(
-  -s
-  --max-time 5
-  -o /dev/null
-  -w "%{http_code}"
-  -X POST "${SERVER_URL}/v1/tools/call"
-  -H "Content-Type: application/json"
-)
-if [[ -n "${UNITARES_HTTP_API_TOKEN:-}" ]]; then
-  curl_args+=(-H "Authorization: Bearer ${UNITARES_HTTP_API_TOKEN}")
-fi
+# Reset the accumulator + stamp last_checkin_ts. checkin.py logs success/fail
+# locally; from the hook's perspective the attempt is fire-and-forget — we
+# always reset so the next edit starts a fresh accumulator window rather than
+# double-firing on counters that may already have been committed server-side.
+python3 "${SESSION_CACHE_HELPER}" \
+  reset-milestone \
+  --workspace "${PWD}" >/dev/null 2>&1 || true
 
-HTTP_CODE=$(curl "${curl_args[@]}" \
-  -d "{\"name\": \"process_agent_update\", \"arguments\": ${ARGS_JSON}}" 2>/dev/null || echo "000")
-
-# Reset the accumulator + stamp last_checkin_ts only on a clean 2xx. Anything
-# else leaves the counters intact so the next edit re-evaluates the threshold
-# instead of silently dropping the attempted check-in.
-if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
-  python3 "${SESSION_CACHE_HELPER}" \
-    reset-milestone \
-    --workspace "${PWD}" >/dev/null 2>&1 || true
-
-  NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
-  python3 "${SESSION_CACHE_HELPER}" \
-    set session \
-    --workspace "${PWD}" \
-    --merge \
-    --stamp \
-    --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
-fi
+NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
+python3 "${SESSION_CACHE_HELPER}" \
+  set session \
+  --workspace "${PWD}" \
+  --merge \
+  --stamp \
+  --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
 
 exit 0

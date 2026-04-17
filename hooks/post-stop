@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — Stop hook
+#
+# Fires once per Claude turn (when Claude stops emitting actions).
+# Reads the Stop hook JSON payload on stdin, builds a turn summary,
+# submits a process_agent_update via scripts/checkin.py, exits fast.
+#
+# Invocation is synchronous (5s POST timeout in checkin.py); `|| true`
+# at the end prevents the hook from blocking the turn on failure.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Read stdin once — we use it both for the turn summary AND for the
+# session-cache lookup (Claude Code's session_id field is the slot).
+PAYLOAD=$(cat 2>/dev/null || echo "{}")
+[[ -z "${PAYLOAD}" ]] && PAYLOAD="{}"
+
+# Resolve slot-aware session cache via shared helper.
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+if [[ ! -f "${SESSION_LOOKUP}" ]]; then
+  exit 0
+fi
+eval "$(printf '%s' "${PAYLOAD}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}")"
+
+[[ -z "${CSID:-}" ]] && exit 0
+
+# Build a turn summary (tool count + top-3 tool names + truncated final text).
+SUMMARY=$(python3 - "${PAYLOAD}" <<'PY'
+import json, sys
+raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    p = json.loads(raw)
+except Exception:
+    p = {}
+tools = p.get("tool_calls", []) or []
+names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]
+top3 = ", ".join(names[:3]) if names else "no tools"
+text = (p.get("final_text") or "").strip().replace("\n", " ")
+summary = f"Turn summary: {len(tools)} tool calls ({top3}); response excerpt: {text[:120]}"
+print(summary)
+PY
+)
+
+# Complexity: tool count / 10, capped at 0.85.
+COMPLEXITY=$(python3 - "${PAYLOAD}" <<'PY'
+import json, sys
+raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    p = json.loads(raw)
+except Exception:
+    p = {}
+n = len(p.get("tool_calls", []) or [])
+print(f"{min(n/10.0, 0.85):.3f}")
+PY
+)
+
+python3 "${PLUGIN_ROOT}/scripts/checkin.py" \
+  --event turn_stop \
+  --response-text "${SUMMARY}" \
+  --complexity "${COMPLEXITY}" \
+  --confidence 0.7 \
+  --client-session-id "${CSID}" \
+  --continuity-token "${TOK}" \
+  --uuid "${UUID}" \
+  --slot "${SLOT}" \
+  >/dev/null 2>&1 || true
+
+exit 0
