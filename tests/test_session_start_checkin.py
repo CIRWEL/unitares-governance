@@ -61,8 +61,8 @@ class _ReusableTCPServer(socketserver.TCPServer):
 def test_session_start_emits_post_onboard_checkin(tmp_path):
     """session-start hook posts a check-in with event='session_start'."""
     RecordingHandler.calls = []
-    port = 18769
-    srv = _ReusableTCPServer(("127.0.0.1", port), RecordingHandler)
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     try:

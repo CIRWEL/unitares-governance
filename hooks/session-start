@@ -316,8 +316,11 @@ SESSION_RESOLUTION_SOURCE=$(python3 -c "import json,sys; print(json.loads(sys.ar
 CONTINUITY_TOKEN_SUPPORTED=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('continuity_token_supported',''))" "${ONBOARD_RESULT}")
 # used_force_new removed — force_new is never automatic (per 718ccd3 invariant)
 
-# Post-onboard check-in: anchor EISV baseline. Fire-and-forget; the
-# shared helper swallows errors and logs to ~/.unitares/checkins.log.
+# Post-onboard check-in: anchor EISV baseline. Synchronous invocation
+# (the async `&` form loses the race against short-lived mock servers in
+# tests). Blocks up to ~5s if governance is unreachable; helper swallows
+# errors into ~/.unitares/checkins.log. Trailing `|| true` keeps the hook
+# from aborting if the check-in fails.
 if [[ -n "${CLIENT_SESSION_ID}" ]]; then
   WORKSPACE_BASENAME=$(basename "${PWD}")
   BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "no-git")
