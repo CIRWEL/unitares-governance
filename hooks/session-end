@@ -4,7 +4,7 @@
 # Fires when the Claude Code session terminates (window close, etc).
 # Posts a final session_end check-in. Synchronous — session may be
 # closing abruptly, and we want the POST to land before the process
-# exits. 5s POST timeout in checkin.py bounds the wait. `|| true`
+# exits. 20s POST timeout in checkin.py bounds the wait. `|| true`
 # ensures failure doesn't propagate.
 set -uo pipefail
 

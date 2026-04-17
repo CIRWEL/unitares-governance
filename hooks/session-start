@@ -318,7 +318,7 @@ CONTINUITY_TOKEN_SUPPORTED=$(python3 -c "import json,sys; print(json.loads(sys.a
 
 # Post-onboard check-in: anchor EISV baseline. Synchronous invocation
 # (the async `&` form loses the race against short-lived mock servers in
-# tests). Blocks up to ~5s if governance is unreachable; helper swallows
+# tests). Blocks up to ~20s if governance is unreachable; helper swallows
 # errors into ~/.unitares/checkins.log. Trailing `|| true` keeps the hook
 # from aborting if the check-in fails.
 if [[ -n "${CLIENT_SESSION_ID}" ]]; then
