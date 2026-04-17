@@ -316,6 +316,24 @@ SESSION_RESOLUTION_SOURCE=$(python3 -c "import json,sys; print(json.loads(sys.ar
 CONTINUITY_TOKEN_SUPPORTED=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('continuity_token_supported',''))" "${ONBOARD_RESULT}")
 # used_force_new removed — force_new is never automatic (per 718ccd3 invariant)
 
+# Post-onboard check-in: anchor EISV baseline. Fire-and-forget; the
+# shared helper swallows errors and logs to ~/.unitares/checkins.log.
+if [[ -n "${CLIENT_SESSION_ID}" ]]; then
+  WORKSPACE_BASENAME=$(basename "${PWD}")
+  BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "no-git")
+  CHECKIN_SUMMARY="Session initialized for ${WORKSPACE_BASENAME} on branch ${BRANCH}"
+  python3 "${PLUGIN_ROOT}/scripts/checkin.py" \
+    --event session_start \
+    --response-text "${CHECKIN_SUMMARY}" \
+    --complexity 0.1 \
+    --confidence 0.9 \
+    --client-session-id "${CLIENT_SESSION_ID}" \
+    --continuity-token "${CONTINUITY_TOKEN}" \
+    --uuid "${AGENT_UUID}" \
+    --slot "${SESSION_SLOT:-default}" \
+    >/dev/null 2>&1 || true
+fi
+
 # Stamp updated_at on the cache the helper wrote (keeps the existing invariant).
 if [[ -n "${SESSION_CACHE_HELPER}" ]]; then
   python3 "${SESSION_CACHE_HELPER}" \

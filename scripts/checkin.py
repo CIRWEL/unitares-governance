@@ -156,3 +156,37 @@ def submit_checkin(
     except Exception as e:
         _append_log(slot=slot, event=event, uuid=uuid, status="error", error=str(e))
         return "error"
+
+
+def _cli() -> int:
+    import argparse
+    p = argparse.ArgumentParser(description="Submit one governance check-in.")
+    p.add_argument("--event", required=True)
+    p.add_argument("--response-text", required=True)
+    p.add_argument("--complexity", type=float, required=True)
+    p.add_argument("--confidence", type=float, required=True)
+    p.add_argument("--client-session-id", required=True)
+    p.add_argument("--continuity-token", default="")
+    p.add_argument("--slot", required=True)
+    p.add_argument("--uuid", default="")
+    p.add_argument("--server-url", default=None)
+    p.add_argument("--plugin-version", default="0.3.0")
+    args = p.parse_args()
+
+    status = submit_checkin(
+        event=args.event,
+        response_text=args.response_text,
+        complexity=args.complexity,
+        confidence=args.confidence,
+        client_session_id=args.client_session_id,
+        continuity_token=args.continuity_token,
+        slot=args.slot,
+        uuid=args.uuid,
+        server_url=args.server_url,
+        plugin_version=args.plugin_version,
+    )
+    return 0 if status in ("sent", "skip_kill_switch") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())
