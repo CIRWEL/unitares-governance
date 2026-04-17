@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — PostToolUse hook (process_agent_update)
+#
+# Fires whenever the agent calls the process_agent_update MCP tool directly
+# (e.g. via /checkin). Resets the milestone accumulator and stamps
+# session.last_checkin_ts so the post-edit auto-checkin hook does not
+# immediately re-fire on the next edit.
+#
+# This is what makes manual check-ins authoritative. Prior to this hook,
+# keeping the accumulator in sync relied on /checkin.md guidance that the
+# agent had to follow by hand — reliable enough to ship, not reliable enough
+# to keep relying on.
+#
+# Runs async — must never block or produce output on failure.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+SESSION_CACHE_HELPER=""
+for candidate in \
+  "${PLUGIN_ROOT}/scripts/session_cache.py" \
+  "${PLUGIN_ROOT}/scripts/client/session_cache.py"
+do
+  if [[ -f "${candidate}" ]]; then
+    SESSION_CACHE_HELPER="${candidate}"
+    break
+  fi
+done
+
+if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
+  exit 0
+fi
+
+# Only act when we already have a governance session cached — this hook is
+# tool-scoped so we shouldn't see an empty cache in practice, but guarding
+# makes the hook safe to install in workspaces that never onboarded.
+SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
+  exit 0
+fi
+
+python3 "${SESSION_CACHE_HELPER}" \
+  reset-milestone \
+  --workspace "${PWD}" >/dev/null 2>&1 || true
+
+NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))" 2>/dev/null || echo "")
+if [[ -n "${NOW_EPOCH}" ]]; then
+  python3 "${SESSION_CACHE_HELPER}" \
+    set session \
+    --workspace "${PWD}" \
+    --merge \
+    --stamp \
+    --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+fi
+
+exit 0

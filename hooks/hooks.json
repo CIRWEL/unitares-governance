@@ -22,6 +22,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__process_agent_update",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd' post-checkin",
+            "async": true
+          }
+        ]
       }
     ]
   }

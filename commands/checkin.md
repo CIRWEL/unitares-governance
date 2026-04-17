@@ -40,9 +40,6 @@ After the call:
 - if verdict is `pause` or `reject`, recommend `request_dialectic_review`
 - if verdict is `guide`, summarize the guidance and adjust behavior
 
-On a successful check-in, clear the local milestone accumulator and stamp the
-session's `last_checkin_ts` so the post-edit auto-checkin hook sees this call
-and does not re-fire on the next edit. Use the shared helper:
-
-- `scripts/session_cache.py reset-milestone --workspace <pwd>`
-- `scripts/session_cache.py set session --workspace <pwd> --merge --stamp --json '{"last_checkin_ts": <now_epoch>}'`
+The plugin's PostToolUse hook on `process_agent_update` automatically resets
+the local milestone accumulator and stamps `last_checkin_ts` when the tool
+call succeeds, so the auto-checkin hook will not immediately re-fire.
