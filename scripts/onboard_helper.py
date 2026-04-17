@@ -21,6 +21,7 @@ consume. Never raises — always returns a dict on stdout.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -50,6 +51,41 @@ def _slot_filename(slot: str | None) -> str:
     safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in slot)
     safe = safe[:64]  # keep file names sane
     return f"session-{safe}.json"
+
+
+def _scope_name_by_slot(agent_name: str, slot: str | None) -> str:
+    """Append a short, stable slot fingerprint to the agent name.
+
+    Why this exists: the server's onboard handler runs a name-claim lookup
+    (``resolve_by_name_claim`` in src/mcp_handlers/identity/resolution.py)
+    that matches an existing agent purely by label. Two parallel Claude
+    processes in the same workspace would send the same ``name`` (the
+    workspace basename) and both get bound to whichever agent already owns
+    that label — even though each has its own slot-isolated cache.
+
+    Scoping the name by slot defeats the name-claim at the client. Each
+    conversation (slot) gets its own label, its own UUID, its own
+    trajectory. Existing slot caches keep working: the UUID-direct resume
+    path in ``run_onboard`` runs before this, so pinned slots keep their
+    current identity regardless of name.
+
+    Unslotted callers (Codex stdio, single-process flows) keep the legacy
+    naming — this only scopes when a slot is actually provided.
+
+    The architectural fix (remove name-claim, or seed trajectory at
+    creation so the trajectory_required guard always fires) is tracked
+    separately; see the project memory entry on name-claim ghosts.
+    """
+    if not slot:
+        return agent_name
+    # Hash the full slot so fingerprints collide only on a genuine hash
+    # clash (~1 in 4 billion for 8 hex chars), not when two slots happen to
+    # share a prefix. An earlier version used slot[:8] directly, which
+    # broke for workloads where slots share a common prefix (e.g. tests
+    # using "itest-slot-*" or CI runners that stamp a pipeline prefix on
+    # every session id).
+    fingerprint = hashlib.md5(slot.encode("utf-8")).hexdigest()[:8]
+    return f"{agent_name}#{fingerprint}"
 
 
 # --- IO primitives (separable for tests) -----------------------------------
@@ -201,7 +237,12 @@ def run_onboard(
             }
         # UUID not found — fall through to fresh onboard
 
-    arguments: dict[str, Any] = {"name": agent_name, "model_type": model_type}
+    # Scope the name by slot so the server's name-claim lookup doesn't bind
+    # this slot's onboard to an agent owned by another slot. UUID-direct
+    # resume already ran above for slots with a cached identity, so this
+    # only matters on the first onboard per slot.
+    scoped_name = _scope_name_by_slot(agent_name, slot)
+    arguments: dict[str, Any] = {"name": scoped_name, "model_type": model_type}
     if force_new:
         arguments["force_new"] = True
 
