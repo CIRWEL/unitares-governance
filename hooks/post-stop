@@ -12,21 +12,19 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Read stdin (hook payload). Empty stdin is fine — payload fields default.
+# Read stdin once — we use it both for the turn summary AND for the
+# session-cache lookup (Claude Code's session_id field is the slot).
 PAYLOAD=$(cat 2>/dev/null || echo "{}")
 [[ -z "${PAYLOAD}" ]] && PAYLOAD="{}"
 
-# Resolve session cache: prefer workspace-local, fall back to home.
-SESSION_FILE="${PWD}/.unitares/session.json"
-[[ ! -f "${SESSION_FILE}" ]] && SESSION_FILE="${HOME}/.unitares/session.json"
-[[ ! -f "${SESSION_FILE}" ]] && exit 0
+# Resolve slot-aware session cache via shared helper.
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+if [[ ! -f "${SESSION_LOOKUP}" ]]; then
+  exit 0
+fi
+eval "$(printf '%s' "${PAYLOAD}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}")"
 
-UUID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('uuid',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-CSID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('client_session_id',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-TOK=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('continuity_token',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-SLOT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('slot','default'))" "${SESSION_FILE}" 2>/dev/null || echo "default")
-
-[[ -z "${CSID}" ]] && exit 0
+[[ -z "${CSID:-}" ]] && exit 0
 
 # Build a turn summary (tool count + top-3 tool names + truncated final text).
 SUMMARY=$(python3 - "${PAYLOAD}" <<'PY'

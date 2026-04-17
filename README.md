@@ -161,6 +161,16 @@ for Bearer-token auth against remote governance. The refactored helper uses
 stdlib urllib and does not pass this header. Local-only deployments (the
 supported default) are unaffected.
 
+### Upgrading from plugin 0.2.0
+
+Claude Code caches installed plugins at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. A cache at version `0.2.0` predates the check-in trigger hooks shipped in `0.3.0`. To force a refresh:
+
+```bash
+rm -rf ~/.claude/plugins/cache/unitares-governance-plugin/unitares-governance/0.2.0/
+```
+
+The cache will repopulate on the next Claude Code launch. Verify the refresh landed by checking `hooks/` contains `post-stop` and `session-end` under the new version path.
+
 ## Development Workflow
 
 Use a lightweight branch and PR flow for normal changes:

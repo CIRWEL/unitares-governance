@@ -86,7 +86,25 @@ if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
   exit 0
 fi
 
-SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+# Resolve slot-aware session cache via shared helper. HOOK_INPUT already
+# captured from stdin above — its session_id field is the slot key.
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+if [[ -f "${SESSION_LOOKUP}" ]]; then
+  # Load the full slotted session JSON for auto_checkin_decision, which needs
+  # continuity_token, client_session_id, and last_checkin_ts from the cache.
+  SESSION_PAYLOAD=$(printf '%s' "${HOOK_INPUT}" | python3 -c "
+import json, sys
+sys.path.insert(0, '${PLUGIN_ROOT}/scripts')
+from _session_lookup import load_session_for_hook
+data = load_session_for_hook('${PWD}', sys.stdin.read())
+print(json.dumps(data))
+" 2>/dev/null || echo "{}")
+  # Also eval shell vars for UUID_HINT and SLOT (needed by checkin.py call).
+  eval "$(printf '%s' "${HOOK_INPUT}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}" 2>/dev/null || true)"
+else
+  SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+fi
+
 if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
@@ -169,18 +187,10 @@ if [[ -z "${CONTINUITY_TOKEN}" && -z "${CLIENT_SESSION_ID}" ]]; then
   exit 0
 fi
 
-# Pull uuid + slot from the session cache for diagnostic logging.
-# Not strictly required for governance — checkin.py needs --slot, and --uuid
-# only shows in the local log prefix.
-SESSION_JSON="${PWD}/.unitares/session.json"
-[[ ! -f "${SESSION_JSON}" ]] && SESSION_JSON="${HOME}/.unitares/session.json"
-if [[ -f "${SESSION_JSON}" ]]; then
-  SLOT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('slot','default'))" "${SESSION_JSON}" 2>/dev/null || echo "default")
-  UUID_HINT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('uuid',''))" "${SESSION_JSON}" 2>/dev/null || echo "")
-else
-  SLOT="default"
-  UUID_HINT=""
-fi
+# Pull uuid + slot from the session-lookup eval above (slotted cache).
+# Fall back to "default" / "" if the eval didn't produce them.
+SLOT="${SLOT:-default}"
+UUID_HINT="${UUID:-}"
 
 # NOTE: The previous inline curl supported UNITARES_HTTP_API_TOKEN as a Bearer
 # token; scripts/checkin.py does not (yet). Local deployments — the only

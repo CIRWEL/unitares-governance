@@ -11,22 +11,23 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-SESSION_FILE="${PWD}/.unitares/session.json"
-[[ ! -f "${SESSION_FILE}" ]] && SESSION_FILE="${HOME}/.unitares/session.json"
-[[ ! -f "${SESSION_FILE}" ]] && exit 0
+PAYLOAD=$(cat 2>/dev/null || echo "{}")
+[[ -z "${PAYLOAD}" ]] && PAYLOAD="{}"
 
-UUID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('uuid',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-CSID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('client_session_id',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-TOK=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('continuity_token',''))" "${SESSION_FILE}" 2>/dev/null || echo "")
-SLOT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('slot','default'))" "${SESSION_FILE}" 2>/dev/null || echo "default")
+# Resolve slot-aware session cache via shared helper.
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+if [[ ! -f "${SESSION_LOOKUP}" ]]; then
+  exit 0
+fi
+eval "$(printf '%s' "${PAYLOAD}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}")"
 
-[[ -z "${CSID}" ]] && exit 0
+[[ -z "${CSID:-}" ]] && exit 0
 
 # Tally check-ins posted this session from the log (best effort).
 LOG="${UNITARES_CHECKIN_LOG:-${HOME}/.unitares/checkins.log}"
 COUNT=0
 if [[ -f "${LOG}" ]]; then
-  COUNT=$(grep -c "slot=${SLOT}" "${LOG}" 2>/dev/null || echo "0")
+  COUNT=$(grep -c "slot=${SLOT}" "${LOG}" 2>/dev/null || printf 0)
 fi
 
 SUMMARY="Session ended: ${COUNT} check-ins posted this session"
