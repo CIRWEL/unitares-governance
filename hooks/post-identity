@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# UNITARES Governance Plugin — PostToolUse hook (onboard|identity|bind_session)
+#
+# Fires when the agent calls a governance identity-creating/resuming tool.
+# Captures the UUID + token + label from the tool response and writes them
+# to the slot-scoped session cache.
+#
+# Part C Session A: with this hook in place, the agent's first MCP tool call
+# becomes the sole source of truth for session identity, making it possible
+# to eventually remove the HTTP pre-onboard from session-start
+# (UNITARES_DISABLE_AUTO_ONBOARD=1 opts in early).
+#
+# Runs async — must never block or produce output on failure.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+SESSION_CACHE_HELPER=""
+for candidate in \
+  "${PLUGIN_ROOT}/scripts/session_cache.py" \
+  "${PLUGIN_ROOT}/scripts/client/session_cache.py"
+do
+  if [[ -f "${candidate}" ]]; then
+    SESSION_CACHE_HELPER="${candidate}"
+    break
+  fi
+done
+if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
+  exit 0
+fi
+
+# Claude Code sends the tool event as JSON on stdin.
+HOOK_INPUT=""
+if [[ ! -t 0 ]]; then
+  HOOK_INPUT=$(cat 2>/dev/null) || true
+fi
+if [[ -z "${HOOK_INPUT}" ]]; then
+  exit 0
+fi
+
+# Extract session_id (slot), tool_name, and the response payload that matters.
+# MCP tool responses arrive wrapped as {"content": [{"type":"text","text":"<JSON>"}]}.
+# The inner JSON contains uuid, agent_id, client_session_id, continuity_token,
+# display_name. We only record for the three identity-creating/resuming tools.
+# HOOK_INPUT goes via argv[1] rather than stdin because the heredoc below
+# redirects stdin from itself — piping into `python3 - <<'PY'` would be lost.
+EXTRACTED=$(python3 - "${HOOK_INPUT}" <<'PY' 2>/dev/null || true
+import json, sys
+
+try:
+    data = json.loads(sys.argv[1] if len(sys.argv) > 1 else "{}")
+except Exception:
+    sys.exit(0)
+
+tool_name = (data.get("tool_name") or "").lower()
+# Match mcp__<server>__(onboard|identity|bind_session)
+_id_tools = ("onboard", "identity", "bind_session")
+suffix = tool_name.rsplit("__", 1)[-1] if "__" in tool_name else tool_name
+if suffix not in _id_tools:
+    sys.exit(0)
+
+session_id = data.get("session_id") or ""
+
+resp = data.get("tool_response") or {}
+# MCP wrap: content -> [{"text": "<json>"}]
+if isinstance(resp, dict) and "content" in resp:
+    parts = resp.get("content") or []
+    if parts and isinstance(parts[0], dict):
+        text = parts[0].get("text") or ""
+        try:
+            resp = json.loads(text)
+        except Exception:
+            resp = {}
+
+if not isinstance(resp, dict) or not resp.get("success", True):
+    sys.exit(0)
+
+# Only record if we actually got a UUID — otherwise nothing useful to cache.
+uuid_val = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
+if not uuid_val:
+    sys.exit(0)
+
+payload = {
+    "uuid": uuid_val,
+    "agent_id": resp.get("agent_id", "") or (resp.get("bound_identity") or {}).get("agent_id", ""),
+    "client_session_id": resp.get("client_session_id", ""),
+    "continuity_token": resp.get("continuity_token", ""),
+    "display_name": resp.get("display_name", "") or (resp.get("bound_identity") or {}).get("display_name", ""),
+    "continuity_token_supported": resp.get("continuity_token_supported", False),
+    "session_resolution_source": resp.get("session_resolution_source", ""),
+    "slot": session_id,
+}
+# Emit session_id on stdout line 1, JSON payload on line 2 — the shell
+# splits them to pass --slot and --json separately.
+print(session_id)
+print(json.dumps(payload))
+PY
+)
+
+if [[ -z "${EXTRACTED}" ]]; then
+  exit 0
+fi
+
+SLOT=$(printf '%s' "${EXTRACTED}" | head -n 1)
+PAYLOAD=$(printf '%s' "${EXTRACTED}" | tail -n +2)
+
+if [[ -z "${PAYLOAD}" || "${PAYLOAD}" == "{}" ]]; then
+  exit 0
+fi
+
+# Merge into slot-scoped session cache. --merge preserves any fields the
+# session-start hook wrote earlier (e.g. server_url, agent_name) while
+# overwriting uuid/token/etc. from this response.
+SLOT_ARG=()
+if [[ -n "${SLOT}" ]]; then
+  SLOT_ARG=(--slot "${SLOT}")
+fi
+
+python3 "${SESSION_CACHE_HELPER}" \
+  set session \
+  --workspace "${PWD}" \
+  "${SLOT_ARG[@]}" \
+  --merge \
+  --stamp \
+  --json "${PAYLOAD}" >/dev/null 2>&1 || true
+
+exit 0
