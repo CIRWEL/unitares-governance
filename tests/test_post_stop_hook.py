@@ -51,9 +51,13 @@ def test_post_stop_emits_turn_stop_checkin(tmp_path):
             "PWD": str(tmp_path),
         }
         hook = PLUGIN_ROOT / "hooks" / "post-stop"
+        # cwd=tmp_path is REQUIRED: bash overwrites $PWD at startup to
+        # match the actual working directory, so env PWD alone doesn't
+        # tell the hook where to find the session cache.
         subprocess.run(
             [str(hook)],
             env=env,
+            cwd=str(tmp_path),
             input=stop_payload,
             text=True,
             timeout=15,
