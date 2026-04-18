@@ -56,6 +56,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*__(onboard|identity|bind_session)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd' post-identity",
+            "async": true
+          }
+        ]
       }
     ]
   }

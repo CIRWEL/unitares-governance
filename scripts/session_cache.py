@@ -32,11 +32,25 @@ def _workspace_path(raw: str | None) -> Path:
     return Path(base).expanduser().resolve()
 
 
-def _cache_path(kind: str, workspace: Path) -> Path:
+def _slot_suffix(slot: str | None) -> str:
+    """Safe-filename slot suffix. Matches onboard_helper/_session_lookup."""
+    if not slot:
+        return ""
+    safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in slot)
+    return safe[:64]
+
+
+def _cache_path(kind: str, workspace: Path, slot: str | None = None) -> Path:
     try:
         filename = CACHE_FILES[kind]
     except KeyError as exc:
         raise ValueError(f"unknown cache kind: {kind}") from exc
+    # Only the session cache is slot-scoped — milestone accumulator is
+    # workspace-level (per the auto-checkin design).
+    safe_slot = _slot_suffix(slot) if kind == "session" else ""
+    if safe_slot:
+        stem, _, ext = filename.rpartition(".")
+        filename = f"{stem}-{safe_slot}.{ext}"
     return workspace / CACHE_DIR / filename
 
 
@@ -75,13 +89,13 @@ def _load_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_path(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
-    print(_cache_path(args.kind, workspace))
+    print(_cache_path(args.kind, workspace, getattr(args, "slot", None)))
     return 0
 
 
 def cmd_get(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
-    payload = _read_json(_cache_path(args.kind, workspace))
+    payload = _read_json(_cache_path(args.kind, workspace, getattr(args, "slot", None)))
     if args.key:
         value = payload.get(args.key)
         if value is None:
@@ -97,7 +111,7 @@ def cmd_get(args: argparse.Namespace) -> int:
 
 def cmd_set(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
-    path = _cache_path(args.kind, workspace)
+    path = _cache_path(args.kind, workspace, getattr(args, "slot", None))
     payload = _load_payload(args)
     if args.merge:
         existing = _read_json(path)
@@ -113,7 +127,7 @@ def cmd_set(args: argparse.Namespace) -> int:
 
 def cmd_clear(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
-    path = _cache_path(args.kind, workspace)
+    path = _cache_path(args.kind, workspace, getattr(args, "slot", None))
     try:
         path.unlink()
     except FileNotFoundError:
@@ -194,17 +208,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_path = sub.add_parser("path", help="Print the absolute cache path")
     p_path.add_argument("kind", choices=sorted(CACHE_FILES))
     p_path.add_argument("--workspace")
+    p_path.add_argument("--slot", help="Claude Code session_id for slotted cache")
     p_path.set_defaults(func=cmd_path)
 
     p_get = sub.add_parser("get", help="Read cached JSON")
     p_get.add_argument("kind", choices=sorted(CACHE_FILES))
     p_get.add_argument("--workspace")
+    p_get.add_argument("--slot", help="Claude Code session_id for slotted cache")
     p_get.add_argument("--key")
     p_get.set_defaults(func=cmd_get)
 
     p_set = sub.add_parser("set", help="Write cached JSON")
     p_set.add_argument("kind", choices=sorted(CACHE_FILES))
     p_set.add_argument("--workspace")
+    p_set.add_argument("--slot", help="Claude Code session_id for slotted cache")
     p_set.add_argument("--json")
     p_set.add_argument("--merge", action="store_true")
     p_set.add_argument("--stamp", action="store_true")
@@ -214,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_clear = sub.add_parser("clear", help="Delete a cache file")
     p_clear.add_argument("kind", choices=sorted(CACHE_FILES))
     p_clear.add_argument("--workspace")
+    p_clear.add_argument("--slot", help="Claude Code session_id for slotted cache")
     p_clear.set_defaults(func=cmd_clear)
 
     p_bump = sub.add_parser(

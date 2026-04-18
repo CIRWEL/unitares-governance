@@ -194,6 +194,72 @@ def test_session_start_context_is_a_receipt_not_an_assertion(tmp_path):
     )
 
 
+def test_disable_auto_onboard_emits_no_tool_calls(tmp_path):
+    """UNITARES_DISABLE_AUTO_ONBOARD=1 → hook must not invoke any tool calls.
+
+    The whole point of the flag is that the agent's first MCP tool call
+    becomes the sole identity-creation path, eliminating the HTTP/stdio
+    bifurcation that generated ghosts.
+    """
+    RecordingHandler.calls = []
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+            "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "PWD": str(tmp_path),
+            "UNITARES_DISABLE_AUTO_ONBOARD": "1",
+        }
+        hook = PLUGIN_ROOT / "hooks" / "session-start"
+        result = subprocess.run(
+            [str(hook)], env=env, cwd=str(tmp_path), input="{}", text=True,
+            capture_output=True, timeout=20, check=False,
+        )
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+    tool_calls = [c.get("name") for c in RecordingHandler.calls if isinstance(c, dict)]
+    assert tool_calls == [], (
+        f"hook must not invoke tool calls when auto-onboard is disabled; "
+        f"saw: {tool_calls}"
+    )
+
+    context = json.loads(result.stdout).get("additional_context", "")
+    assert "No identity has been created" in context, (
+        "flag-enabled context must state identity was not pre-created"
+    )
+    assert "onboard(" in context and "identity(agent_uuid=" in context, (
+        "context must show the three first-call options (onboard/identity/bind_session)"
+    )
+
+
+def test_disable_auto_onboard_still_reports_offline(tmp_path):
+    """Flag does not change the offline path — unreachable server still reports OFFLINE."""
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "HOME": str(tmp_path),
+        "UNITARES_SERVER_URL": "http://127.0.0.1:1",
+        "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "PWD": str(tmp_path),
+        "UNITARES_DISABLE_AUTO_ONBOARD": "1",
+    }
+    hook = PLUGIN_ROOT / "hooks" / "session-start"
+    result = subprocess.run(
+        [str(hook)], env=env, cwd=str(tmp_path), input="{}", text=True,
+        capture_output=True, timeout=20, check=False,
+    )
+    context = json.loads(result.stdout).get("additional_context", "")
+    assert "OFFLINE" in context
+
+
 class TestAgentNameDerivation:
     """The hook must not fall back to hostname -s for agent naming.
 
