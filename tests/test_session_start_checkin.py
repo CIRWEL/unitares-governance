@@ -99,3 +99,50 @@ def test_session_start_emits_post_onboard_checkin(tmp_path):
         f"no session_start check-in seen; tools received: "
         f"{[c.get('name') for c in RecordingHandler.calls]}"
     )
+
+
+def test_session_start_context_instructs_first_call_identity_bind(tmp_path):
+    """Context surfaced to Claude explicitly instructs the first-MCP-call bind.
+
+    The HTTP onboard done by this hook creates one identity; the MCP stdio
+    transport auto-derives a *different* identity from transport signals
+    unless the agent calls identity(agent_uuid=..., resume=true) first.
+    That instruction must appear verbatim in the SessionStart additional_context
+    so Claude actually performs the bind.
+    """
+    RecordingHandler.calls = []
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+            "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "PWD": str(tmp_path),
+        }
+        hook = PLUGIN_ROOT / "hooks" / "session-start"
+        result = subprocess.run(
+            [str(hook)],
+            env=env,
+            input="{}",
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+    payload = json.loads(result.stdout)
+    context = payload.get("additional_context", "")
+    assert "identity(agent_uuid=" in context, (
+        "context must instruct `identity(agent_uuid=..., resume=true)` as the "
+        "first MCP call — otherwise stdio binds to an auto-derived ghost"
+    )
+    assert "resume=true" in context, "bind instruction must include resume=true"
+    assert "test-uuid-12345" in context, "bind instruction must include the actual UUID"

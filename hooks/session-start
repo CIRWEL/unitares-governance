@@ -396,7 +396,19 @@ fi
 
 CONTEXT="${CONTEXT}
 
-On your first governance MCP tool call, pass agent_uuid=\"${AGENT_UUID}\" to bind your MCP session to this identity.
+⚠ IDENTITY BINDING — REQUIRED FIRST MCP TOOL CALL
+
+The onboard above ran over HTTP and created identity ${AGENT_UUID:0:8}...
+Your MCP stdio transport is a separate channel and will auto-derive a
+different identity from transport signals unless you bind explicitly.
+
+Before any other governance tool, invoke:
+    identity(agent_uuid=\"${AGENT_UUID}\", resume=true)
+
+Only \`identity\` and \`onboard\` accept \`agent_uuid\` for binding. Other
+tools (\`agent\`, \`observe\`, \`process_agent_update\`, \`get_governance_metrics\`,
+etc.) do not — calling them first will bind your stdio session to an
+auto-derived identity and you'll show up as a ghost in the fleet.
 
 Preferred workflow:
 - use meaningful check-ins, not per-edit check-ins
