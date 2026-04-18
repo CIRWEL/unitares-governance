@@ -219,12 +219,43 @@ def test_uuid_direct_resume_does_not_rescope_name(tmp_path: Path) -> None:
 # ---- Integration: real server, real distinct UUIDs -------------------------
 
 
+SERVER_URL = "http://127.0.0.1:8767"
+
+
 def _server_reachable() -> bool:
     try:
-        urllib.request.urlopen("http://127.0.0.1:8767/health", timeout=1)
+        urllib.request.urlopen(f"{SERVER_URL}/health", timeout=1)
         return True
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         return False
+
+
+def _archive_agent(uuid: str) -> None:
+    """Best-effort archive of a UUID created by this test.
+
+    This test hits the real governance server and creates two identities
+    per run. Without teardown they pile up as ``itest-plugin#*`` ghosts in
+    production (operator caught a pair-per-run accumulation 2026-04-17).
+    The server's periodic test-agent sweep is a backstop, not a substitute
+    for the test cleaning up its own state.
+    """
+    if not uuid:
+        return
+    payload = {
+        "name": "archive_agent",
+        "arguments": {"agent_id": uuid, "reason": "itest teardown"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{SERVER_URL}/v1/tools/call", data=body, method="POST"
+    )
+    req.add_header("Content-Type", "application/json")
+    try:
+        urllib.request.urlopen(req, timeout=2).read()
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        # Teardown is best-effort — if the server is down or the UUID was
+        # already swept by Vigil, we don't want to fail a passing test.
+        pass
 
 
 @pytest.mark.skipif(not _server_reachable(), reason="governance server on :8767 unreachable")
@@ -240,22 +271,26 @@ def test_integration_two_slots_get_distinct_uuids(tmp_path: Path) -> None:
     ws_b.mkdir()
 
     result_a = run_onboard(
-        server_url="http://127.0.0.1:8767",
+        server_url=SERVER_URL,
         agent_name="itest-plugin",
         model_type="claude-code",
         workspace=ws_a,
         slot=slot_a,
     )
     result_b = run_onboard(
-        server_url="http://127.0.0.1:8767",
+        server_url=SERVER_URL,
         agent_name="itest-plugin",
         model_type="claude-code",
         workspace=ws_b,
         slot=slot_b,
     )
 
-    assert result_a["status"] == "ok", result_a
-    assert result_b["status"] == "ok", result_b
-    assert result_a["uuid"] != result_b["uuid"], (
-        f"slot isolation broken: both slots resolved to the same UUID {result_a['uuid']}"
-    )
+    try:
+        assert result_a["status"] == "ok", result_a
+        assert result_b["status"] == "ok", result_b
+        assert result_a["uuid"] != result_b["uuid"], (
+            f"slot isolation broken: both slots resolved to the same UUID {result_a['uuid']}"
+        )
+    finally:
+        _archive_agent(result_a.get("uuid", ""))
+        _archive_agent(result_b.get("uuid", ""))
