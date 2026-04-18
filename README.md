@@ -1,5 +1,10 @@
 # UNITARES Governance
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757.svg)](https://docs.claude.com/en/docs/claude-code/plugins)
+[![Codex Plugin](https://img.shields.io/badge/Codex-plugin-10a37f.svg)](./CODEX_START.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](.claude-plugin/plugin.json)
+
 Governance client for UNITARES. This repo provides agent-facing skills, commands, and client adapters for connecting coding agents to a running UNITARES governance server.
 
 ## Purpose
