@@ -46,24 +46,30 @@ def _slot_filename(slot: Optional[str]) -> str:
 
 
 def resolve_session_file(workspace: str | Path, slot: Optional[str]) -> Optional[Path]:
-    """Return the slot-scoped session file path, or the legacy path
-    when ``slot`` is empty. Returns None if the file does not exist."""
+    """Return the slot-scoped session file path, or a workspace-local
+    legacy path when ``slot`` is empty. Returns None if no file exists.
+
+    Identity-honesty note (2026-04-18): the prior ``$HOME/.unitares/session.json``
+    last-resort fallback has been removed. It was an axiom-violating shared
+    cache — any Claude Code / Codex / CLI session on the same machine whose
+    own slotted or workspace-unslotted cache was empty would silently adopt
+    whatever identity the most recent session had written there, siphoning
+    one UUID across parallel agents (invariant #3: per-instance isolation).
+    Callers that previously depended on the HOME fallback must now pass
+    ``workspace=Path.home()`` explicitly to opt into the shared file; silent
+    collapse is no longer possible.
+    """
     unitares_dir = Path(workspace) / ".unitares"
     slotted = unitares_dir / _slot_filename(slot)
     if slotted.exists():
         return slotted
-    # Fall back to unslotted file (legacy single-slot layout + older
-    # session-start hooks). This preserves compatibility with operators
-    # who have not yet crossed over to the slotted onboard path.
+    # Workspace-local unslotted fallback is still OK — different workspaces
+    # have different .unitares/ dirs, so parallel sessions in separate
+    # projects cannot collide on it. Only the removed $HOME fallback was
+    # a true cross-agent shared location.
     unslotted = unitares_dir / "session.json"
     if unslotted.exists():
         return unslotted
-    # Last resort: check $HOME/.unitares for the unslotted path. Used by
-    # ad-hoc tools (scripts/unitares CLI, unitares_lite) that don't
-    # operate inside a workspace.
-    home_unslotted = Path.home() / ".unitares" / "session.json"
-    if home_unslotted.exists():
-        return home_unslotted
     return None
 
 

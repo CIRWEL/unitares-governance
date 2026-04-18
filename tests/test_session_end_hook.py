@@ -41,7 +41,10 @@ def test_session_end_emits_checkin(tmp_path):
             "PWD": str(tmp_path),
         }
         hook = PLUGIN_ROOT / "hooks" / "session-end"
-        subprocess.run([str(hook)], env=env, timeout=15, check=False)
+        # cwd=tmp_path REQUIRED: bash overwrites $PWD at startup to match
+        # actual cwd, so the hook needs to run with tmp_path as working dir
+        # for workspace-local .unitares/session.json to be found.
+        subprocess.run([str(hook)], env=env, cwd=str(tmp_path), timeout=15, check=False)
     finally:
         srv.shutdown()
         thread.join(timeout=2)
