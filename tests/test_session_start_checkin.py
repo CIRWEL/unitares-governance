@@ -73,6 +73,8 @@ def test_session_start_emits_post_onboard_checkin(tmp_path):
             "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "PWD": str(tmp_path),
+            # Legacy-path tests: opt back into auto-onboard (default is now 1).
+            "UNITARES_DISABLE_AUTO_ONBOARD": "0",
         }
         hook = PLUGIN_ROOT / "hooks" / "session-start"
         # The hook expects a hook-context JSON on stdin (see its `HOOK_INPUT`
@@ -123,6 +125,8 @@ def test_session_start_context_instructs_first_call_identity_bind(tmp_path):
             "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "PWD": str(tmp_path),
+            # Legacy-path tests: opt back into auto-onboard (default is now 1).
+            "UNITARES_DISABLE_AUTO_ONBOARD": "0",
         }
         hook = PLUGIN_ROOT / "hooks" / "session-start"
         result = subprocess.run(
@@ -169,6 +173,8 @@ def test_session_start_context_is_a_receipt_not_an_assertion(tmp_path):
             "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
             "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "PWD": str(tmp_path),
+            # Legacy-path tests: opt back into auto-onboard (default is now 1).
+            "UNITARES_DISABLE_AUTO_ONBOARD": "0",
         }
         hook = PLUGIN_ROOT / "hooks" / "session-start"
         result = subprocess.run(
@@ -285,6 +291,8 @@ class TestAgentNameDerivation:
                 "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
                 "PWD": str(pwd),
                 "USER": "testuser",
+                # Legacy-path: these tests verify the onboard call's name arg.
+                "UNITARES_DISABLE_AUTO_ONBOARD": "0",
             }
             env.update(env_overrides)
             hook = PLUGIN_ROOT / "hooks" / "session-start"
