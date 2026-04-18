@@ -135,13 +135,38 @@ except Exception:
 }
 
 # ---------------------------------------------------------------------------
-# Derive agent name
+# Derive agent name — preference order:
+#   1. User override at ~/.unitares/display-name (one line, trimmed)
+#   2. Workspace basename if PWD is a git repo — useful for distinguishing
+#      parallel sessions in different projects
+#   3. $USER@YYYYMMDD — generic but informative
+#   4. Empty (let server pick structured_agent_id like "Claude_Code_20260417")
+#
+# Deliberately NOT falling back to `hostname -s` — reifies a machine-level
+# label onto a session-level identity, which causes every session started
+# from $HOME to inherit the Mac's system name (e.g., "The-CIRWEL-Group").
 # ---------------------------------------------------------------------------
-PROJECT_BASENAME="$(basename "${PWD}")"
-if [[ "${PWD}" == "${HOME}" || -z "${PROJECT_BASENAME}" || "${PROJECT_BASENAME}" == "/" ]]; then
-  AGENT_NAME="$(hostname -s)"
-else
-  AGENT_NAME="${PROJECT_BASENAME}"
+AGENT_NAME=""
+AGENT_NAME_SOURCE=""
+DISPLAY_NAME_OVERRIDE="${HOME}/.unitares/display-name"
+if [[ -f "${DISPLAY_NAME_OVERRIDE}" ]]; then
+  AGENT_NAME=$(head -n 1 "${DISPLAY_NAME_OVERRIDE}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -n "${AGENT_NAME}" ]]; then
+    AGENT_NAME_SOURCE="~/.unitares/display-name"
+  fi
+fi
+
+if [[ -z "${AGENT_NAME}" ]]; then
+  PROJECT_BASENAME="$(basename "${PWD}")"
+  if [[ -d "${PWD}/.git" && -n "${PROJECT_BASENAME}" && "${PROJECT_BASENAME}" != "/" ]]; then
+    AGENT_NAME="${PROJECT_BASENAME}"
+    AGENT_NAME_SOURCE="workspace basename"
+  elif [[ -n "${USER:-}" ]]; then
+    AGENT_NAME="${USER}@$(date +%Y%m%d)"
+    AGENT_NAME_SOURCE="\$USER@date fallback"
+  else
+    AGENT_NAME_SOURCE="server structured_id"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -382,38 +407,41 @@ if [[ -n "${AGENT_ID}" ]]; then
 fi
 
 CONTEXT="UNITARES Governance: ONLINE
-Agent: ${AGENT_NAME} (${AGENT_ID_SNIPPET}...)
-UUID: ${AGENT_UUID}
-Session: ${CLIENT_SESSION_ID:0:12}..."
+
+A provisional identity was created on your behalf via HTTP onboard:
+  UUID:  ${AGENT_UUID}
+  Label: ${AGENT_NAME} (derived from ${AGENT_NAME_SOURCE}; not your choice)
+  Session: ${CLIENT_SESSION_ID:0:12}...
+
+Nothing external depends on this identity yet — you can keep, replace,
+rename, or abandon it. Until you act, your MCP stdio transport is NOT
+bound to this UUID; it will auto-derive a different identity from
+transport signals on your first tool call, leaving this one orphaned."
 
 if [[ -n "${EISV_SUMMARY}" ]]; then
   CONTEXT="${CONTEXT}
-EISV: ${EISV_SUMMARY}"
-fi
 
-# No force_new NOTE — force_new is never automatic. Trajectory failures
-# are surfaced as onboard_failed with clear recovery guidance.
+Post-onboard EISV: ${EISV_SUMMARY}"
+fi
 
 CONTEXT="${CONTEXT}
 
-⚠ IDENTITY BINDING — REQUIRED FIRST MCP TOOL CALL
-
-The onboard above ran over HTTP and created identity ${AGENT_UUID:0:8}...
-Your MCP stdio transport is a separate channel and will auto-derive a
-different identity from transport signals unless you bind explicitly.
-
-Before any other governance tool, invoke:
+To claim this identity on your stdio transport (recommended):
     identity(agent_uuid=\"${AGENT_UUID}\", resume=true)
 
-Only \`identity\` and \`onboard\` accept \`agent_uuid\` for binding. Other
-tools (\`agent\`, \`observe\`, \`process_agent_update\`, \`get_governance_metrics\`,
-etc.) do not — calling them first will bind your stdio session to an
-auto-derived identity and you'll show up as a ghost in the fleet.
+Only \`identity\` and \`onboard\` accept \`agent_uuid\`. Other tools
+(\`agent\`, \`observe\`, \`process_agent_update\`, etc.) do not — calling
+them first orphans this UUID and shows you as a ghost in the fleet.
+
+Other options:
+  - Rename:  identity(agent_uuid=\"${AGENT_UUID}\", resume=true, name=\"<your-choice>\")
+  - Replace: identity(agent_uuid=\"<known-uuid>\", resume=true) to resume a prior identity
+  - Abandon: do nothing — the provisional identity becomes orphaned (future cleanup sweeps will archive it)
 
 Preferred workflow:
-- use meaningful check-ins, not per-edit check-ins
-- use /checkin after a real milestone
-- use /diagnose, identity(), or health_check() when behavior looks wrong"
+- meaningful check-ins, not per-edit check-ins
+- /checkin after a real milestone
+- /diagnose, identity(), or health_check() when behavior looks wrong"
 
 if [[ -n "${SKILL_CONTENT}" ]]; then
   CONTEXT="${CONTEXT}

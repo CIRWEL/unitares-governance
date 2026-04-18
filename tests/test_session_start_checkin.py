@@ -146,3 +146,123 @@ def test_session_start_context_instructs_first_call_identity_bind(tmp_path):
     )
     assert "resume=true" in context, "bind instruction must include resume=true"
     assert "test-uuid-12345" in context, "bind instruction must include the actual UUID"
+
+
+def test_session_start_context_is_a_receipt_not_an_assertion(tmp_path):
+    """SessionStart context reports what was created; it does not assert identity.
+
+    The axiom: 'Never silently substitute identity' (identity-invariants #1).
+    Phrasing matters — telling the agent 'Agent: X' is an assertion of fact.
+    Telling the agent 'A provisional identity was created' is a receipt the
+    agent can accept, override, or ignore.
+    """
+    RecordingHandler.calls = []
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+            "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+            "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "PWD": str(tmp_path),
+        }
+        hook = PLUGIN_ROOT / "hooks" / "session-start"
+        result = subprocess.run(
+            [str(hook)], env=env, input="{}", text=True,
+            capture_output=True, timeout=20, check=False,
+        )
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+    context = json.loads(result.stdout).get("additional_context", "")
+    assert "provisional" in context.lower(), (
+        "context must describe the created identity as provisional, not assert it"
+    )
+    assert "derived from" in context, (
+        "context must surface the label's provenance (workspace, USER@date, etc.)"
+    )
+    assert "not your choice" in context, (
+        "context must explicitly name the presumption so the agent can override"
+    )
+    assert "abandon" in context.lower(), (
+        "context must describe the abandon path — orphaned identity is a valid choice"
+    )
+
+
+class TestAgentNameDerivation:
+    """The hook must not fall back to hostname -s for agent naming.
+
+    Historical bug: a user's Mac hostname was 'The-CIRWEL-Group'. Every
+    session started from $HOME inherited that hostname as the agent label,
+    leaking a machine-level identifier into session-level identity. The
+    new preference order is override → workspace basename → $USER@date,
+    with hostname deliberately excluded.
+    """
+
+    def _run_hook(self, env_overrides, pwd, tmp_path, input_payload="{}"):
+        RecordingHandler.calls = []
+        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+        port = srv.server_address[1]
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        try:
+            env = {
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "HOME": str(tmp_path),
+                "UNITARES_SERVER_URL": f"http://127.0.0.1:{port}",
+                "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
+                "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+                "PWD": str(pwd),
+                "USER": "testuser",
+            }
+            env.update(env_overrides)
+            hook = PLUGIN_ROOT / "hooks" / "session-start"
+            # cwd=pwd is REQUIRED: bash overwrites $PWD at startup to match
+            # the actual working directory, so we can't just set PWD in env.
+            result = subprocess.run(
+                [str(hook)], env=env, cwd=str(pwd), input=input_payload, text=True,
+                capture_output=True, timeout=20, check=False,
+            )
+        finally:
+            srv.shutdown()
+            thread.join(timeout=2)
+        return result, RecordingHandler.calls
+
+    def test_override_file_wins_over_everything(self, tmp_path):
+        """~/.unitares/display-name is the top-priority name source."""
+        (tmp_path / ".unitares").mkdir()
+        (tmp_path / ".unitares" / "display-name").write_text("my-chosen-name\n")
+
+        project = tmp_path / "some-project"
+        project.mkdir()
+        (project / ".git").mkdir()
+
+        _, calls = self._run_hook({}, project, tmp_path)
+        onboard_calls = [c for c in calls if c.get("name") == "onboard"]
+        assert onboard_calls, "hook should onboard"
+        assert onboard_calls[0]["arguments"].get("name") == "my-chosen-name"
+
+    def test_git_repo_uses_workspace_basename(self, tmp_path):
+        """PWD has .git → agent name is the directory basename."""
+        project = tmp_path / "my-project"
+        project.mkdir()
+        (project / ".git").mkdir()
+
+        _, calls = self._run_hook({}, project, tmp_path)
+        onboard_calls = [c for c in calls if c.get("name") == "onboard"]
+        assert onboard_calls[0]["arguments"].get("name") == "my-project"
+
+    def test_home_dir_uses_user_at_date_not_hostname(self, tmp_path):
+        """PWD == HOME and no git → $USER@YYYYMMDD, NEVER the hostname."""
+        _, calls = self._run_hook({}, tmp_path, tmp_path)
+        onboard_calls = [c for c in calls if c.get("name") == "onboard"]
+        name = onboard_calls[0]["arguments"].get("name", "")
+        import re
+        assert re.match(r"^testuser@\d{8}$", name), (
+            f"expected testuser@YYYYMMDD, got {name!r} — hostname fallback must not return"
+        )
