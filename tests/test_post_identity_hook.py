@@ -42,7 +42,7 @@ def _read_session_cache(workspace: Path, slot: str | None = None) -> dict:
 
 def _mcp_response(uuid="u-123", agent_id="Test_Agent", sid="agent-abc",
                   token="v1.tok", display_name="TestAgent"):
-    """Build a realistic MCP tool response envelope."""
+    """Build a realistic MCP tool response envelope (legacy dict-wrapped shape)."""
     inner = {
         "success": True,
         "uuid": uuid,
@@ -53,6 +53,26 @@ def _mcp_response(uuid="u-123", agent_id="Test_Agent", sid="agent-abc",
         "continuity_token_supported": True,
     }
     return {"content": [{"type": "text", "text": json.dumps(inner)}]}
+
+
+def _mcp_response_list(uuid="u-123", agent_id="Test_Agent", sid="agent-abc",
+                       token="v1.tok", display_name="TestAgent"):
+    """Build an MCP tool response in the bare-list shape Claude Code actually sends.
+
+    Empirically (2026-04-19) Claude Code passes tool_response as a raw list of
+    content parts, not wrapped in {"content": [...]}. Captured from live hook
+    stdin during a process_agent_update / identity call.
+    """
+    inner = {
+        "success": True,
+        "uuid": uuid,
+        "agent_id": agent_id,
+        "client_session_id": sid,
+        "continuity_token": token,
+        "display_name": display_name,
+        "continuity_token_supported": True,
+    }
+    return [{"type": "text", "text": json.dumps(inner)}]
 
 
 class TestPostIdentityRecordsResponse:
@@ -161,6 +181,25 @@ class TestPostIdentityResilience:
         }
         _run_hook(hook_input, tmp_path)
         assert _read_session_cache(tmp_path, "s1") == {}
+
+    def test_bare_list_response_shape_is_parsed(self, tmp_path):
+        """Claude Code delivers tool_response as a bare list, not dict-wrapped.
+
+        Regression guard for the silent-bail bug where `isinstance(resp, dict)
+        and "content" in resp` rejected the real Claude Code shape, causing
+        every onboard to exit without writing the session cache.
+        """
+        hook_input = {
+            "session_id": "slot-list",
+            "tool_name": "mcp__unitares-governance__onboard",
+            "tool_input": {"name": "x"},
+            "tool_response": _mcp_response_list(uuid="u-list-1"),
+        }
+        result = _run_hook(hook_input, tmp_path)
+        assert result.returncode == 0
+        cache = _read_session_cache(tmp_path, "slot-list")
+        assert cache["uuid"] == "u-list-1"
+        assert cache["continuity_token"] == "v1.tok"
 
     def test_bound_identity_uuid_recovered_on_resume(self, tmp_path):
         """identity(resume=true) may return bound_identity dict instead of top-level uuid."""
