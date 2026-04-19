@@ -2,6 +2,9 @@
 .claude/
 .unitares/
 
+# Local git worktrees
+.worktrees/
+
 # Python
 __pycache__/
 *.py[cod]
