@@ -208,11 +208,22 @@ def run_onboard(
     # Fast path: UUID-direct resume (like SDK agents).
     # If we have a cached UUID, call identity(agent_uuid=...) instead of
     # going through the token/session resolution chain.
+    #
+    # Forward continuity_token alongside agent_uuid when the cache has one.
+    # The server's Part C gate (UNITARES_IDENTITY_STRICT) requires the
+    # token's `aid` claim to match agent_uuid; without it the call logs as
+    # a suspected hijack today and will be rejected once strict mode
+    # becomes default. The token is already in cache (written below at
+    # write_cache time); the prior version simply did not forward it.
     cached_uuid = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
     if cached_uuid and not force_new:
+        identity_args: dict[str, Any] = {"agent_uuid": cached_uuid, "resume": True}
+        cached_token = (cache.get("continuity_token") or "").strip()
+        if cached_token:
+            identity_args["continuity_token"] = cached_token
         raw = post_json(
             url,
-            {"name": "identity", "arguments": {"agent_uuid": cached_uuid, "resume": True}},
+            {"name": "identity", "arguments": identity_args},
             timeout, auth_token,
         )
         parsed = unwrap_tool_response(raw)
