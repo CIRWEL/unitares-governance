@@ -81,39 +81,48 @@ ${SKILL_CONTENT}"
 fi
 
 # ---------------------------------------------------------------------------
-# Recent session UUIDs from ~/.unitares/session-*.json — useful for resume
+# Workspace-local continuity probe (./.unitares/session.json in CWD).
+#
+# IMPORTANT: we deliberately do NOT enumerate ~/.unitares/session-*.json.
+# That glob produced an unfiltered cross-instance UUID menu, which — paired
+# with an `identity(agent_uuid=..., resume=true)` suggestion — invited
+# fresh agents to pattern-match on model name and resume into other
+# instances' identities. See KG bug 2026-04-20T00:09:51 and the
+# identity-honesty invariants in operator memory.
+#
+# The workspace-local cache, by contrast, is owned by the agent that
+# previously ran in THIS directory (written by the post-identity hook).
+# Surfacing its existence — but NOT the bare UUID — is ownership-grounded.
 # ---------------------------------------------------------------------------
-RECENT_UUIDS=""
-if [[ -d "${HOME}/.unitares" ]]; then
-  RECENT_UUIDS=$(python3 - "${HOME}/.unitares" <<'PY' 2>/dev/null || true
-import json, os, sys
+WORKSPACE_RESUME_HINT=""
+WORKSPACE_CACHE="${PWD}/.unitares/session.json"
+if [[ -f "${WORKSPACE_CACHE}" ]]; then
+  WORKSPACE_RESUME_HINT=$(python3 - "${WORKSPACE_CACHE}" <<'PY' 2>/dev/null || true
+import json, sys
 from pathlib import Path
 
-unitares = Path(sys.argv[1])
-files = sorted(
-    [p for p in unitares.glob("session-*.json") if p.is_file()],
-    key=lambda p: p.stat().st_mtime,
-    reverse=True,
-)[:5]
+cache = Path(sys.argv[1])
+try:
+    data = json.loads(cache.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
 
-lines = []
-for p in files:
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        continue
-    uuid = data.get("uuid") or ""
-    if not uuid:
-        continue
-    label = data.get("display_name") or data.get("agent_id") or ""
-    ts = data.get("updated_at", "")
-    date_part = ts[:10] if ts else ""
-    suffix = f" ({label})" if label else ""
-    date_suffix = f" — last active {date_part}" if date_part else ""
-    lines.append(f"  - {uuid}{suffix}{date_suffix}")
+if not data.get("continuity_token"):
+    sys.exit(0)
 
-if lines:
-    print("\n".join(lines))
+label = data.get("display_name") or data.get("agent_id") or ""
+ts = data.get("updated_at", "")
+date_part = ts[:10] if ts else ""
+suffix = f" (last active {date_part})" if date_part else ""
+print(
+    "This workspace has a prior continuity_token cached at "
+    "./.unitares/session.json"
+    + (f" for {label}" if label else "")
+    + suffix
+    + ". To resume that identity, call:\n"
+    "    onboard(continuity_token=<value from ./.unitares/session.json>)\n"
+    "Otherwise call onboard() to mint a fresh identity for this run."
+)
 PY
 )
 fi
@@ -135,21 +144,21 @@ else
   CONTEXT="UNITARES Governance: ONLINE
 
 No identity has been created on your behalf. Your MCP stdio transport is
-unbound. To join, invoke one of the following as your first governance
-tool call:
+unbound. As your first governance tool call, invoke:
 
-    onboard(purpose=\"<what you're doing>\")              — new identity
-    identity(agent_uuid=\"<known-uuid>\", resume=true)     — resume a prior
-    bind_session(agent_uuid=\"<uuid>\", resume=true)       — explicit bind
+    onboard(purpose=\"<what you're doing>\")
 
-The post-identity hook records UUID + token locally so follow-up tool
-calls (/checkin, /diagnose, auto-checkin on edits) can find your session."
+The post-identity hook records UUID + continuity_token locally so follow-up
+tool calls (/checkin, auto-checkin on edits) can find your session.
 
-  if [[ -n "${RECENT_UUIDS}" ]]; then
+If you need to recover a specific prior identity by UUID, that is an
+operator action — run /diagnose for guided recovery rather than guessing
+a UUID."
+
+  if [[ -n "${WORKSPACE_RESUME_HINT}" ]]; then
     CONTEXT="${CONTEXT}
 
-Recent session UUIDs on this host:
-${RECENT_UUIDS}"
+${WORKSPACE_RESUME_HINT}"
   fi
 
   if [[ -n "${SKILL_CONTENT}" ]]; then
