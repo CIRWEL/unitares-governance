@@ -139,6 +139,24 @@ class TestSessionStartContext:
         assert "No identity has been created on your behalf" in ctx
         assert "onboard(" in ctx
 
+    def test_online_context_instructs_force_new_on_fresh_onboard(self, tmp_path):
+        """Regression guard: a bare `onboard()` suggestion lets the server
+        pin-resume a prior agent's UUID by IP:UA fingerprint alone on shared
+        hosts (PATH 2 bleed — server emits `identity_hijack_suspected` with
+        path='path2_ipua_pin'). The default fresh-mint suggestion must pass
+        `force_new=true` so the server cannot silently adopt an unrelated
+        identity.
+
+        See KG council follow-up to #83 (server-side PATH 2 observation)
+        and the companion server PR #92.
+        """
+        stdout, _ = _serve_and_run(tmp_path)
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "force_new=true" in ctx, (
+            "Fresh-onboard suggestion must include force_new=true to avoid "
+            "silent pin-resume. Context was: " + ctx[:500]
+        )
+
     def test_online_context_does_not_offer_agent_uuid_resume_by_default(self, tmp_path):
         """agent_uuid resume is a hijack vector when paired with cross-instance
         UUID enumeration. Surfacing it in the default menu invites fresh agents

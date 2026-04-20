@@ -19,9 +19,17 @@ source_files:
 Call `onboard()` to register a fresh identity, or `identity(agent_uuid=..., resume=true)` to resume a stored one:
 
 ```
-onboard(name, model_type)                        # always creates a fresh UUID
+onboard(name, model_type, force_new=true)        # create a fresh UUID (see note)
+onboard(continuity_token="<saved-token>")        # resume via signed token
 identity(agent_uuid="<saved-uuid>", resume=true) # resume an existing identity
 ```
+
+**`force_new=true` is load-bearing for fresh mint.** Without it, a bare
+`onboard()` on a shared host (multiple same-family agents, Claude Desktop
+stdio, CI runners) may pin-resume a prior agent's UUID by IP:UA fingerprint
+alone — the server emits `identity_hijack_suspected` with
+`path='path2_ipua_pin'` when this happens. Pass `force_new=true` whenever
+you don't have a continuity_token for the workspace.
 
 Returns:
 - **UUID**: Your persistent identity — save this to resume later
@@ -106,7 +114,7 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 
 ### Essential (use in every session)
 
-- `onboard()` — Register or reconnect identity
+- `onboard(continuity_token=...)` or `onboard(force_new=true)` — Register or reconnect identity. A bare `onboard()` can silently pin-resume another agent; always pass a continuity_token or force_new.
 - `process_agent_update()` — Check in with work summary, complexity, confidence
 - `get_governance_metrics()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved

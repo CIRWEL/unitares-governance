@@ -44,7 +44,7 @@ That path is now the preferred default. Claude hook automation remains supported
 
 The intended workflow is:
 
-1. `onboard()`
+1. `onboard(continuity_token=<saved>)` to resume, or `onboard(force_new=true)` to mint fresh — a bare `onboard()` can silently pin-resume an unrelated agent on shared hosts
 2. preserve `client_session_id` and `continuity_token` when available
 3. call `process_agent_update()` after meaningful work
 4. call `get_governance_metrics()` for read-only state

@@ -18,6 +18,10 @@ Then call `onboard()` against UNITARES:
 
 - include `continuity_token` when available
 - otherwise include `client_session_id` when available
+- if NEITHER is available, pass `force_new=true` — a bare `onboard()` can
+  pin-resume an unrelated prior agent's UUID by IP:UA fingerprint alone
+  (PATH 2 bleed; see `identity_hijack_suspected` events with
+  `path='path2_ipua_pin'`)
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 
