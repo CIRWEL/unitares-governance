@@ -216,6 +216,90 @@ def test_uuid_direct_resume_does_not_rescope_name(tmp_path: Path) -> None:
     assert "name" not in sent["arguments"]
 
 
+def test_uuid_direct_resume_forwards_continuity_token_when_cached(tmp_path: Path) -> None:
+    """When the slot cache holds a continuity_token alongside the UUID, the
+    UUID-direct resume path must forward it. The server's Part C gate
+    requires the token's `aid` claim to match agent_uuid; without it the
+    call logs as a suspected hijack today and will be rejected once
+    UNITARES_IDENTITY_STRICT=strict is promoted to default. The token has
+    been written to cache since the first ok onboard — the prior helper
+    simply never read it back on the resume call."""
+    cache_dir = tmp_path / ".unitares"
+    cache_dir.mkdir()
+    (cache_dir / "session-existing.json").write_text(
+        json.dumps({
+            "uuid": "dddd4444-0000-0000-0000-000000000000",
+            "continuity_token": "v1.signedtokenpayload.signature",
+        }),
+        encoding="utf-8",
+    )
+
+    identity_response = {
+        "result": {
+            "success": True,
+            "uuid": "dddd4444-0000-0000-0000-000000000000",
+            "agent_id": "Claude_Code_dddd4444",
+            "client_session_id": "agent-dddd4444-000",
+            "continuity_token": "v1.refreshed.token",
+            "session_resolution_source": "agent_uuid_direct",
+            "continuity_token_supported": True,
+            "display_name": "cirwel",
+        }
+    }
+    transport = _FakeTransport(identity_response)
+
+    run_onboard(
+        server_url="http://unit-test",
+        agent_name="cirwel",
+        model_type="claude-code",
+        workspace=tmp_path,
+        slot="existing",
+        post_json=transport,
+    )
+
+    sent_args = transport.calls[0]["payload"]["arguments"]
+    assert sent_args["agent_uuid"] == "dddd4444-0000-0000-0000-000000000000"
+    assert sent_args.get("continuity_token") == "v1.signedtokenpayload.signature", (
+        f"Token must be forwarded so the server's Part C gate can verify "
+        f"ownership. Sent args: {sent_args}"
+    )
+
+
+def test_uuid_direct_resume_omits_token_when_cache_lacks_one(tmp_path: Path) -> None:
+    """Backward-compat: legacy caches without a continuity_token still resume
+    by uuid alone (the gate logs in current `log` mode, doesn't reject)."""
+    cache_dir = tmp_path / ".unitares"
+    cache_dir.mkdir()
+    (cache_dir / "session-existing.json").write_text(
+        json.dumps({"uuid": "eeee5555-0000-0000-0000-000000000000"}),
+        encoding="utf-8",
+    )
+
+    identity_response = {
+        "result": {
+            "success": True,
+            "uuid": "eeee5555-0000-0000-0000-000000000000",
+            "agent_id": "Claude_Code_eeee5555",
+        }
+    }
+    transport = _FakeTransport(identity_response)
+
+    run_onboard(
+        server_url="http://unit-test",
+        agent_name="cirwel",
+        model_type="claude-code",
+        workspace=tmp_path,
+        slot="existing",
+        post_json=transport,
+    )
+
+    sent_args = transport.calls[0]["payload"]["arguments"]
+    assert "continuity_token" not in sent_args, (
+        f"Empty/missing token must not become a literal empty string in the "
+        f"request. Sent args: {sent_args}"
+    )
+
+
 # ---- Integration: real server, real distinct UUIDs -------------------------
 
 
