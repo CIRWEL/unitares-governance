@@ -187,12 +187,35 @@ If any of these are true, **stop and run subagent research** before writing anot
 - You're changing dimensions without evidence from DevTools
 - The operator can't articulate the issue precisely
 
-The correct move at this point is to dispatch agents to:
+The correct move at this point is to dispatch agents **AND** run WebSearch in parallel:
+
 - Survey the full dashboard conventions (Explore agent, thoroughness "very thorough")
 - Audit the new panel vs. working peers (code-reviewer)
 - Give a skeptical "what's the most-likely remaining issue" take (superpowers:code-reviewer)
+- **WebSearch for known bugs** in the rendering library against the exact symptom. Agents reading local code cannot see ResizeObserver behavior, Chart.js upstream bugs, or browser-specific quirks. Example that burned 5 PRs before finding: Chart.js's `responsive:true` + `maintainAspectRatio:false` in a flex-column parent causes an infinite grow loop ([#11821](https://github.com/chartjs/Chart.js/issues/11821), [#5805](https://github.com/chartjs/Chart.js/issues/5805), [#1798](https://github.com/chartjs/Chart.js/issues/1798)) — invisible to any static analysis, diagnosed in one WebSearch.
 
-One hour of three parallel agents beats four iterations of single-guess PRs.
+One hour of three parallel agents + one WebSearch beats five iterations of single-guess PRs.
+
+## Chart.js Known Bug — Grow-Loop in Flex Parents
+
+On the unitares dashboard, `.panel` is `display: flex; flex-direction: column`. Any chart wrapper inside must combine **all four** of these to prevent an infinite ResizeObserver loop that makes the panel eat into its neighbors:
+
+```css
+.your-chart-wrap {
+    position: relative;
+    flex: 0 0 200px;        /* fixed main-axis size; no grow/shrink */
+    height: 200px;
+    overflow: hidden;       /* absorbs the grow cascade */
+    contain: strict;        /* skip outside layout on resize */
+}
+.your-chart-wrap canvas {
+    box-sizing: border-box; /* Chart.js resize math converges */
+    width: 100% !important;
+    height: 100% !important;
+}
+```
+
+Any one of those alone isn't enough. See `dashboard/styles.css::.fleet-metrics-chart-wrap` for the current reference implementation.
 
 ## Anti-Patterns That Burned Hours
 
