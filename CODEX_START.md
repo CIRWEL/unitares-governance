@@ -29,7 +29,7 @@ This plugin currently optimizes for `explicit`.
 
 If you are not using commands directly, the equivalent raw tool flow is:
 
-1. `onboard()`
+1. `onboard(continuity_token=<saved>)` or `onboard(force_new=true)` — never bare `onboard()`; see identity pin-resume note in the governance-lifecycle skill
 2. keep `continuity_token` when supported, otherwise `client_session_id`
 3. `process_agent_update()` after meaningful work
 4. `get_governance_metrics()` for read-only state checks

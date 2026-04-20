@@ -121,7 +121,8 @@ print(
     + suffix
     + ". To resume that identity, call:\n"
     "    onboard(continuity_token=<value from ./.unitares/session.json>)\n"
-    "Otherwise call onboard() to mint a fresh identity for this run."
+    "Otherwise call onboard(force_new=true) to mint a fresh identity for "
+    "this run — a bare onboard() can pin-resume an unrelated prior agent."
 )
 PY
 )
@@ -146,7 +147,12 @@ else
 No identity has been created on your behalf. Your MCP stdio transport is
 unbound. As your first governance tool call, invoke:
 
-    onboard(purpose=\"<what you're doing>\")
+    onboard(purpose=\"<what you're doing>\", force_new=true)
+
+\`force_new=true\` is load-bearing: without it, the server may pin-resume
+a prior agent's identity by IP:UA fingerprint alone on shared hosts (see
+PATH 2 observation in the UNITARES server). Pass it whenever you do NOT
+have a continuity_token for this workspace.
 
 The post-identity hook records UUID + continuity_token locally so follow-up
 tool calls (/checkin, auto-checkin on edits) can find your session.

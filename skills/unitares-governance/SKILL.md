@@ -33,9 +33,13 @@ Agents typically start with `onboard()` and continue with
 
 ## Session Continuity
 
-Use `onboard()` to register or reconnect identity. The returned
-`client_session_id` should be echoed back on later calls when continuity tokens
-are not available. This prevents attribution fragmentation across sessions.
+Use `onboard()` to register or reconnect identity. **Always pass either
+`continuity_token=<stored>` (to resume) or `force_new=true` (to mint
+fresh).** A bare `onboard()` on a shared host can pin-resume a prior
+agent's UUID by IP:UA fingerprint alone — see the governance-lifecycle
+skill for details. The returned `client_session_id` should be echoed
+back on later calls when continuity tokens are not available. This
+prevents attribution fragmentation across sessions.
 
 Use `process_agent_update()` after meaningful work to record progress,
 complexity, and confidence, then read the returned governance verdict.
