@@ -1,17 +1,25 @@
 """Contract tests for the SessionStart hook.
 
-After the identity-honesty Part C refactor, the hook does NOT create an
-identity on the agent's behalf. It only confirms governance is reachable
-and emits context instructing the agent to make its own first MCP tool
-call (onboard / identity / bind_session). The post-identity PostToolUse
-hook captures the response and writes the session cache.
+After the identity-honesty Part C refactor (2026-04-17) and the identity-
+hijack hardening of 2026-04-20, the hook does NOT create an identity on
+the agent's behalf AND does NOT surface other instances' UUIDs as a
+resume menu. It only:
 
-These tests lock in the new contract:
-  1. Hook emits ZERO HTTP tool calls on SessionStart.
-  2. Online context describes the provisional-free state and lists the
-     three first-call options.
-  3. Offline context reports OFFLINE and does not reference a fake identity.
-  4. Recent session UUIDs (if any in ~/.unitares/) surface as resume hints.
+  1. Confirms governance is reachable.
+  2. Suggests onboard() — fresh identity by default.
+  3. If THIS workspace has its own continuity cache (./.unitares/session.json,
+     written by the post-identity hook on a prior run in this directory),
+     suggests resuming via that signed continuity_token.
+  4. Never enumerates ~/.unitares/session-*.json — those are other instances'
+     identities, and surfacing them as an unfiltered "Recent session UUIDs"
+     menu invited cross-instance hijack (KG bug 2026-04-20T00:09:51).
+
+These tests lock in the post-2026-04-20 contract:
+  - Hook emits ZERO HTTP tool calls on SessionStart.
+  - Online context describes the provisional-free state.
+  - Online context surfaces ONLY the workspace-local continuity cache, if any.
+  - Online context never lists ~/.unitares/session-*.json contents.
+  - Offline context reports OFFLINE and does not reference a fake identity.
 """
 
 from __future__ import annotations
@@ -59,16 +67,21 @@ class _ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def _run_hook(tmp_path, server_url, extra_env=None):
-    """Run session-start with a given server URL and return (stdout, tool_calls)."""
+def _run_hook(tmp_path, server_url, extra_env=None, cwd=None):
+    """Run session-start with a given server URL and return (stdout, tool_calls).
+
+    cwd defaults to tmp_path. Pass a different cwd to test workspace-local
+    continuity cache discovery independently of HOME.
+    """
     RecordingHandler.calls = []
+    workdir = cwd if cwd is not None else tmp_path
     env = {
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "HOME": str(tmp_path),
         "UNITARES_SERVER_URL": server_url,
         "UNITARES_CHECKIN_LOG": str(tmp_path / "checkins.log"),
         "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
-        "PWD": str(tmp_path),
+        "PWD": str(workdir),
         "USER": "testuser",
     }
     if extra_env:
@@ -78,7 +91,7 @@ def _run_hook(tmp_path, server_url, extra_env=None):
     result = subprocess.run(
         [str(hook)],
         env=env,
-        cwd=str(tmp_path),
+        cwd=str(workdir),
         input="{}",
         text=True,
         capture_output=True,
@@ -88,20 +101,23 @@ def _run_hook(tmp_path, server_url, extra_env=None):
     return result.stdout, list(RecordingHandler.calls)
 
 
+def _serve_and_run(tmp_path, **run_kwargs):
+    srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        return _run_hook(tmp_path, f"http://127.0.0.1:{port}", **run_kwargs)
+    finally:
+        srv.shutdown()
+        thread.join(timeout=2)
+
+
 class TestSessionStartMakesNoToolCalls:
     """The hook's single most important invariant: no governance mutations on start."""
 
     def test_online_path_emits_zero_tool_calls(self, tmp_path):
-        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
-        port = srv.server_address[1]
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            _, calls = _run_hook(tmp_path, f"http://127.0.0.1:{port}")
-        finally:
-            srv.shutdown()
-            thread.join(timeout=2)
-
+        _, calls = _serve_and_run(tmp_path)
         tool_calls = [c.get("name") for c in calls if isinstance(c, dict)]
         assert tool_calls == [], (
             f"SessionStart must not invoke any governance tools; saw: {tool_calls}"
@@ -116,23 +132,26 @@ class TestSessionStartMakesNoToolCalls:
 class TestSessionStartContext:
     """Context wording teaches the agent how to bind its own identity."""
 
-    def test_online_context_names_three_first_call_options(self, tmp_path):
-        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
-        port = srv.server_address[1]
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            stdout, _ = _run_hook(tmp_path, f"http://127.0.0.1:{port}")
-        finally:
-            srv.shutdown()
-            thread.join(timeout=2)
-
+    def test_online_context_offers_fresh_onboard(self, tmp_path):
+        stdout, _ = _serve_and_run(tmp_path)
         ctx = json.loads(stdout).get("additional_context", "")
         assert "UNITARES Governance: ONLINE" in ctx
         assert "No identity has been created on your behalf" in ctx
         assert "onboard(" in ctx
-        assert "identity(agent_uuid=" in ctx
-        assert "bind_session(agent_uuid=" in ctx
+
+    def test_online_context_does_not_offer_agent_uuid_resume_by_default(self, tmp_path):
+        """agent_uuid resume is a hijack vector when paired with cross-instance
+        UUID enumeration. Surfacing it in the default menu invites fresh agents
+        to pick someone else's UUID. Recovery via known UUID still works as an
+        explicit operator action via /diagnose, but the hook must not advertise
+        it as a first-call option.
+
+        See KG bug 2026-04-20T00:09:51.
+        """
+        stdout, _ = _serve_and_run(tmp_path)
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "identity(agent_uuid=" not in ctx
+        assert "bind_session(agent_uuid=" not in ctx
 
     def test_offline_context_reports_offline_without_fake_identity(self, tmp_path):
         stdout, _ = _run_hook(tmp_path, "http://127.0.0.1:1")
@@ -141,60 +160,93 @@ class TestSessionStartContext:
         assert "provisional identity" not in ctx.lower()
         assert "uuid:" not in ctx.lower()
 
-    def test_online_context_surfaces_recent_uuids_when_present(self, tmp_path):
-        """Existing ~/.unitares/session-*.json entries surface as resume hints."""
+
+class TestNoCrossInstanceUuidEnumeration:
+    """Regression guard: the hook must NOT enumerate ~/.unitares/session-*.json.
+
+    That file glob produced an unfiltered menu of every UUID that had ever
+    onboarded from this host — across every Claude tab, Codex run, and
+    subagent. Combined with an `identity(agent_uuid=..., resume=true)`
+    suggestion in the same context block, fresh agents pattern-matched on
+    model name and resumed into other instances' identities. KG bug
+    2026-04-20T00:09:51. The fix removes the enumeration entirely.
+    """
+
+    def test_does_not_list_other_instances_session_files(self, tmp_path):
         unitares = tmp_path / ".unitares"
         unitares.mkdir()
-        (unitares / "session-abc.json").write_text(json.dumps({
-            "uuid": "11111111-2222-3333-4444-555555555555",
-            "display_name": "Prior-Session",
-            "updated_at": "2026-04-17T12:00:00+00:00",
+        # Two session files belonging to two unrelated prior instances —
+        # neither owned by the current workspace.
+        (unitares / "session-aaaaaaaaaaaa.json").write_text(json.dumps({
+            "uuid": "aaaaaaaa-1111-2222-3333-444444444444",
+            "display_name": "Other-Instance-A",
+            "updated_at": "2026-04-19T12:00:00+00:00",
+        }))
+        (unitares / "session-bbbbbbbbbbbb.json").write_text(json.dumps({
+            "uuid": "bbbbbbbb-1111-2222-3333-444444444444",
+            "display_name": "Other-Instance-B",
+            "updated_at": "2026-04-19T13:00:00+00:00",
         }))
 
-        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
-        port = srv.server_address[1]
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            stdout, _ = _run_hook(tmp_path, f"http://127.0.0.1:{port}")
-        finally:
-            srv.shutdown()
-            thread.join(timeout=2)
-
+        stdout, _ = _serve_and_run(tmp_path)
         ctx = json.loads(stdout).get("additional_context", "")
-        assert "Recent session UUIDs" in ctx
-        assert "11111111-2222-3333-4444-555555555555" in ctx
-        assert "Prior-Session" in ctx
 
-    def test_online_context_omits_recent_uuids_when_none_exist(self, tmp_path):
-        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
-        port = srv.server_address[1]
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            stdout, _ = _run_hook(tmp_path, f"http://127.0.0.1:{port}")
-        finally:
-            srv.shutdown()
-            thread.join(timeout=2)
+        # Neither UUID nor label may appear — surfacing them is the hijack vector.
+        assert "aaaaaaaa-1111-2222-3333-444444444444" not in ctx
+        assert "bbbbbbbb-1111-2222-3333-444444444444" not in ctx
+        assert "Other-Instance-A" not in ctx
+        assert "Other-Instance-B" not in ctx
+        # The misleading section header must be gone.
+        assert "Recent session UUIDs on this host" not in ctx
 
+
+class TestWorkspaceLocalContinuity:
+    """The workspace-local cache (./.unitares/session.json in CWD) belongs
+    to THIS tab — written by the post-identity hook on a prior run in this
+    directory. Surfacing it as a self-resume hint is ownership-grounded and
+    safe: an agent in workspace X can only see workspace X's prior identity.
+    """
+
+    def test_surfaces_workspace_continuity_token_when_present(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "uuid": "ffffffff-1111-2222-3333-444444444444",
+            "agent_id": "Claude_Workspace_X",
+            "continuity_token": "v1.fake-token-payload.signature",
+            "updated_at": "2026-04-20T00:00:00+00:00",
+        }))
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
         ctx = json.loads(stdout).get("additional_context", "")
-        assert "Recent session UUIDs" not in ctx
+
+        # The hint must point at this workspace's prior continuity_token,
+        # not at any UUID-by-string.
+        assert "continuity_token" in ctx
+        assert "this workspace" in ctx.lower() or "workspace" in ctx.lower()
+        # The bare UUID must not be displayed — that's the hijack-shaped
+        # surface. Only the existence of a continuity token is mentioned.
+        assert "ffffffff-1111-2222-3333-444444444444" not in ctx
+
+    def test_no_workspace_cache_means_no_resume_hint(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        ctx = json.loads(stdout).get("additional_context", "")
+        # No workspace cache → no resume hint block.
+        # The phrase "continuity_token" may still appear in the always-on
+        # copy that explains what the post-identity hook records; what must
+        # NOT appear is the resume hint pointing at a workspace cache.
+        assert "./.unitares/session.json" not in ctx
+        assert "To resume that identity" not in ctx
 
 
 class TestSkillInjection:
     """Fundamentals skill content is injected on both paths (online/offline)."""
 
     def test_online_context_includes_skill(self, tmp_path):
-        srv = _ReusableTCPServer(("127.0.0.1", 0), RecordingHandler)
-        port = srv.server_address[1]
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            stdout, _ = _run_hook(tmp_path, f"http://127.0.0.1:{port}")
-        finally:
-            srv.shutdown()
-            thread.join(timeout=2)
-
+        stdout, _ = _serve_and_run(tmp_path)
         ctx = json.loads(stdout).get("additional_context", "")
         assert "Governance Fundamentals" in ctx
 
