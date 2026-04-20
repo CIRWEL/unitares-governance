@@ -42,6 +42,7 @@ When adding a new panel, every item below must be done:
 | 8 | Chart wrapper needs `position: relative; height: Npx; contain: strict` | `styles.css` | Chart.js's ResizeObserver will thrash parent layout without `contain: strict` |
 | 9 | Canvas: `width: 100% !important; height: 100% !important` | `styles.css` | Required when Chart.js `maintainAspectRatio: false` lives inside a fixed-height parent |
 | 10 | Add nav link `<a href="#SECTION" class="section-nav-item" data-section="SECTION">…</a>` | `dashboard/index.html` top nav | Scroll-spy wires automatically by matching `id` |
+| 11 | If the panel sits OUTSIDE `.main-content` (the 1400px grid), add `#SECTION { max-width: 1400px; margin-left: auto; margin-right: auto; }` to `styles.css` | `styles.css` | Without this, the panel spans the full viewport on wide desktops — becomes wider than its sibling full-width panels (Activity, etc.) and its edges visually "overlap" them |
 
 ## The Chart.js Dark-Theme Trap (Item 4) — Biggest Pitfall
 
