@@ -218,6 +218,11 @@ def run_onboard(
     cached_uuid = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
     if cached_uuid and not force_new:
         identity_args: dict[str, Any] = {"agent_uuid": cached_uuid, "resume": True}
+        # continuity_token is a compatibility surface for external clients;
+        # plugin-internal flows should declare lineage (see S1 in
+        # docs/ontology/plan.md and ontology v2 in docs/ontology/identity.md
+        # in the unitares repo). No behavior change here — S1 owns the
+        # full deprecation window.
         cached_token = (cache.get("continuity_token") or "").strip()
         if cached_token:
             identity_args["continuity_token"] = cached_token

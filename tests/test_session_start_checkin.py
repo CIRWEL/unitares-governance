@@ -179,6 +179,74 @@ class TestSessionStartContext:
         assert "uuid:" not in ctx.lower()
 
 
+class TestS11BannerShape:
+    """Post-S11 banner contract (docs/ontology/plan.md S11 + ontology v2 in
+    docs/ontology/identity.md, in the unitares repo).
+
+    The banner leads with `force_new=true` as THE recommendation (not one of
+    two peer alternatives). Lineage is the honest cross-process bond and is
+    referenced via `parent_agent_id`. The pre-S11 footgun warning that
+    framed `force_new=true` as "load-bearing" mitigation is dropped (PR #16
+    repaired the underlying server-side pin-resume issue).
+    """
+
+    def test_banner_leads_with_force_new(self, tmp_path):
+        stdout, _ = _serve_and_run(tmp_path)
+        ctx = json.loads(stdout).get("additional_context", "")
+        # `force_new=true` must appear before any other onboard()-shaped
+        # suggestion. The pre-S11 banner suggested a bare onboard() first
+        # and only mentioned force_new as a pin-resume mitigation.
+        force_new_idx = ctx.find("force_new=true")
+        assert force_new_idx >= 0, "banner must mention force_new=true"
+        # No bare onboard() recommendation that lacks force_new=true.
+        # We allow other contexts to mention onboard() — but the lead
+        # recommendation must be the force_new+lineage shape.
+        assert "force_new=true" in ctx
+        assert "spawn_reason" in ctx, (
+            "Lead recommendation must include spawn_reason — that's the "
+            "honest signal that this is a new process-instance."
+        )
+
+    def test_banner_drops_load_bearing_warning(self, tmp_path):
+        """Pre-S11 banner warned that `force_new=true` was 'load-bearing'
+        as a pin-resume mitigation. PR #16 in the unitares server repo
+        repaired the underlying footgun, and the new ontology frames
+        force_new as the default posture, not a defensive override.
+        """
+        stdout, _ = _serve_and_run(tmp_path)
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "load-bearing" not in ctx.lower()
+        assert "pin-resume" not in ctx.lower()
+
+    def test_banner_cites_ontology(self, tmp_path):
+        stdout, _ = _serve_and_run(tmp_path)
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "docs/ontology/identity.md" in ctx, (
+            "Banner must cite the v2 ontology by path."
+        )
+
+    def test_lineage_hint_uses_parent_agent_id_framing(self, tmp_path):
+        """When a workspace cache is present, the banner must present its
+        UUID as a `parent_agent_id` candidate, not as a resume credential.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "schema": 2,
+            "uuid": "deadbeef-1111-2222-3333-444444444444",
+            "agent_id": "Prior_Process",
+            "updated_at": "2026-04-20T00:00:00+00:00",
+        }))
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "parent_agent_id" in ctx
+        assert "deadbeef-1111-2222-3333-444444444444" in ctx
+        # Lineage framing — not resume framing.
+        assert "lineage" in ctx.lower()
+        assert "To resume that identity" not in ctx
+
+
 class TestNoCrossInstanceUuidEnumeration:
     """Regression guard: the hook must NOT enumerate ~/.unitares/session-*.json.
 
@@ -218,46 +286,79 @@ class TestNoCrossInstanceUuidEnumeration:
         assert "Recent session UUIDs on this host" not in ctx
 
 
-class TestWorkspaceLocalContinuity:
-    """The workspace-local cache (./.unitares/session.json in CWD) belongs
-    to THIS tab — written by the post-identity hook on a prior run in this
-    directory. Surfacing it as a self-resume hint is ownership-grounded and
-    safe: an agent in workspace X can only see workspace X's prior identity.
+class TestWorkspaceLocalLineage:
+    """Post-S11 contract (docs/ontology/plan.md + docs/ontology/identity.md
+    in the unitares repo): the workspace-local cache is no longer surfaced
+    as a resume credential. Per the v2 ontology, the cached UUID identifies
+    a *prior process-instance* that ran in this workspace — process-instance
+    continuity ended when that process ended. The honest use is as a
+    *lineage candidate* via parent_agent_id, not as a resume target.
     """
 
-    def test_surfaces_workspace_continuity_token_when_present(self, tmp_path):
+    def test_surfaces_lineage_candidate_when_workspace_cache_present(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".unitares").mkdir()
         (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "schema": 2,
             "uuid": "ffffffff-1111-2222-3333-444444444444",
             "agent_id": "Claude_Workspace_X",
-            "continuity_token": "v1.fake-token-payload.signature",
             "updated_at": "2026-04-20T00:00:00+00:00",
         }))
 
         stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
         ctx = json.loads(stdout).get("additional_context", "")
 
-        # The hint must point at this workspace's prior continuity_token,
-        # not at any UUID-by-string.
-        assert "continuity_token" in ctx
-        assert "this workspace" in ctx.lower() or "workspace" in ctx.lower()
-        # The bare UUID must not be displayed — that's the hijack-shaped
-        # surface. Only the existence of a continuity token is mentioned.
-        assert "ffffffff-1111-2222-3333-444444444444" not in ctx
+        # The hint must frame the cached UUID as a lineage candidate,
+        # not as a resume credential. parent_agent_id is the honest bond.
+        assert "lineage" in ctx.lower(), (
+            "Cache hint must use lineage framing, not resume framing. "
+            "Context: " + ctx[:600]
+        )
+        assert "parent_agent_id" in ctx
+        # Surfacing the bare UUID is intentional under the new ontology —
+        # it is the lineage-candidate identifier the agent declares as
+        # parent_agent_id. (Hijack risk is addressed by the framing: it's
+        # a parent reference, not a UUID-to-resume-as.)
+        assert "ffffffff-1111-2222-3333-444444444444" in ctx
+        # And it must NOT be presented as a resume credential.
+        assert "To resume" not in ctx
+        assert "resume that identity" not in ctx
 
-    def test_no_workspace_cache_means_no_resume_hint(self, tmp_path):
+    def test_v1_cache_uuid_is_surfaced_as_lineage_not_resume(self, tmp_path):
+        """A v1 cache (with continuity_token, no schema marker) must still
+        be readable for its lineage UUID, but the token must NOT be
+        surfaced as a resume credential.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            # Legacy v1 shape — no schema field, has continuity_token.
+            "uuid": "11111111-2222-3333-4444-555555555555",
+            "agent_id": "Legacy_Agent",
+            "continuity_token": "v1.legacy-token.signature",
+            "client_session_id": "legacy-sid",
+            "updated_at": "2026-04-19T00:00:00+00:00",
+        }))
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # UUID surfaces as lineage candidate.
+        assert "11111111-2222-3333-4444-555555555555" in ctx
+        assert "lineage" in ctx.lower()
+        # The v1 token must NOT be surfaced as a resume credential.
+        assert "v1.legacy-token.signature" not in ctx
+        assert "To resume" not in ctx
+
+    def test_no_workspace_cache_means_no_lineage_hint(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
         ctx = json.loads(stdout).get("additional_context", "")
-        # No workspace cache → no resume hint block.
-        # The phrase "continuity_token" may still appear in the always-on
-        # copy that explains what the post-identity hook records; what must
-        # NOT appear is the resume hint pointing at a workspace cache.
-        assert "./.unitares/session.json" not in ctx
-        assert "To resume that identity" not in ctx
+        # No workspace cache → no lineage hint block.
+        assert "Lineage candidate" not in ctx
 
 
 class TestSkillInjection:

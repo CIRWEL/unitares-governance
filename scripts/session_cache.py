@@ -27,6 +27,32 @@ CACHE_FILES = {
     "milestone": "last-milestone.json",
 }
 
+# Schema v2 (S11, 2026-04-21): session cache is lineage-only. The fields
+# below were resume-credential surfaces in v1; under ontology v2
+# (docs/ontology/identity.md in the unitares repo) they are not honest
+# cross-process bonds and must not be written into the workspace cache.
+# External clients still receive `continuity_token` from server responses;
+# only the plugin-internal cross-process cache stops mirroring it.
+SESSION_CACHE_SCHEMA = 2
+SESSION_CACHE_FORBIDDEN_FIELDS = (
+    "continuity_token",
+    "continuity_token_supported",
+    "client_session_id",
+    "session_resolution_source",
+)
+
+
+def _scrub_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop forbidden v1 resume-credential fields and stamp the schema.
+
+    Applied to every `set session` write (post-identity hook + any other
+    caller). Defensive: even if a future caller tries to write a token,
+    the cache stays lineage-only.
+    """
+    cleaned = {k: v for k, v in payload.items() if k not in SESSION_CACHE_FORBIDDEN_FIELDS}
+    cleaned["schema"] = SESSION_CACHE_SCHEMA
+    return cleaned
+
 
 def _workspace_path(raw: str | None) -> Path:
     base = raw or os.getcwd()
@@ -110,6 +136,15 @@ def cmd_path(args: argparse.Namespace) -> int:
 def cmd_get(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
     payload = _read_json(_cache_path(args.kind, workspace, getattr(args, "slot", None)))
+    if args.kind == "session" and payload:
+        # v1-cache read: silently drop forbidden resume-credential fields
+        # so a process started against a stale on-disk v1 cache cannot
+        # surface the legacy token as a resume credential. The UUID and
+        # lineage fields remain readable as lineage candidates.
+        payload = {
+            k: v for k, v in payload.items()
+            if k not in SESSION_CACHE_FORBIDDEN_FIELDS
+        }
     if args.key:
         value = payload.get(args.key)
         if value is None:
@@ -131,6 +166,11 @@ def cmd_set(args: argparse.Namespace) -> int:
         existing = _read_json(path)
         existing.update(payload)
         payload = existing
+    if args.kind == "session":
+        # Lineage-only enforcement (S11 + ontology v2). Strip forbidden
+        # resume-credential fields whether they came in via --json or were
+        # carried over from a v1 cache through --merge. Stamps schema=2.
+        payload = _scrub_session_payload(payload)
     if args.stamp:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_json(path, payload)

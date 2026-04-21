@@ -41,8 +41,18 @@ fi
 
 # Extract session_id (slot), tool_name, and the response payload that matters.
 # MCP tool responses arrive wrapped as {"content": [{"type":"text","text":"<JSON>"}]}.
-# The inner JSON contains uuid, agent_id, client_session_id, continuity_token,
-# display_name. We only record for the three identity-creating/resuming tools.
+#
+# Per S11 (docs/ontology/plan.md in the unitares repo) and ontology v2
+# (docs/ontology/identity.md), the workspace cache is now LINEAGE-ONLY.
+# We persist: uuid (the prior process-instance, surfaced as a lineage
+# candidate on the next SessionStart), agent_id (cosmetic role label),
+# parent_agent_id (declared lineage from this process), and updated_at.
+# We deliberately do NOT persist continuity_token, client_session_id, or
+# session_resolution_source — those are resume-credential surfaces that
+# the v2 ontology treats as performative (axioms #3, #5, #10). External
+# clients still receive the token from the server response; only the
+# plugin-internal cross-process cache stops mirroring it.
+#
 # HOOK_INPUT goes via argv[1] rather than stdin because the heredoc below
 # redirects stdin from itself — piping into `python3 - <<'PY'` would be lost.
 EXTRACTED=$(python3 - "${HOOK_INPUT}" <<'PY' 2>/dev/null || true
@@ -89,14 +99,19 @@ uuid_val = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
 if not uuid_val:
     sys.exit(0)
 
+# Lineage-only payload (schema v2). Pull parent_agent_id from the tool
+# input if the agent declared one — this is the honest cross-process bond
+# the new ontology supports.
+tool_input = data.get("tool_input") or {}
+parent_agent_id = ""
+if isinstance(tool_input, dict):
+    parent_agent_id = (tool_input.get("parent_agent_id") or "").strip()
+
 payload = {
+    "schema": 2,
     "uuid": uuid_val,
     "agent_id": resp.get("agent_id", "") or (resp.get("bound_identity") or {}).get("agent_id", ""),
-    "client_session_id": resp.get("client_session_id", ""),
-    "continuity_token": resp.get("continuity_token", ""),
-    "display_name": resp.get("display_name", "") or (resp.get("bound_identity") or {}).get("display_name", ""),
-    "continuity_token_supported": resp.get("continuity_token_supported", False),
-    "session_resolution_source": resp.get("session_resolution_source", ""),
+    "parent_agent_id": parent_agent_id,
     "slot": session_id,
 }
 # Emit session_id on stdout line 1, JSON payload on line 2 — the shell
@@ -117,9 +132,10 @@ if [[ -z "${PAYLOAD}" || "${PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
 
-# Merge into slot-scoped session cache. --merge preserves any fields the
-# session-start hook wrote earlier (e.g. server_url, agent_name) while
-# overwriting uuid/token/etc. from this response.
+# Write the slot-scoped session cache. We deliberately do NOT --merge:
+# under S11 + ontology v2 the cache is lineage-only, and merging would
+# preserve stale continuity_token / client_session_id fields written by
+# v1 cache writers. Overwriting purges them on the first identity call.
 SLOT_ARG=()
 if [[ -n "${SLOT}" ]]; then
   SLOT_ARG=(--slot "${SLOT}")
@@ -129,7 +145,6 @@ python3 "${SESSION_CACHE_HELPER}" \
   set session \
   --workspace "${PWD}" \
   "${SLOT_ARG[@]}" \
-  --merge \
   --stamp \
   --json "${PAYLOAD}" >/dev/null 2>&1 || true
 

@@ -81,7 +81,7 @@ ${SKILL_CONTENT}"
 fi
 
 # ---------------------------------------------------------------------------
-# Workspace-local continuity probe (./.unitares/session.json in CWD).
+# Workspace-local lineage probe (./.unitares/session.json in CWD).
 #
 # IMPORTANT: we deliberately do NOT enumerate ~/.unitares/session-*.json.
 # That glob produced an unfiltered cross-instance UUID menu, which — paired
@@ -90,14 +90,16 @@ fi
 # instances' identities. See KG bug 2026-04-20T00:09:51 and the
 # identity-honesty invariants in operator memory.
 #
-# The workspace-local cache, by contrast, is owned by the agent that
-# previously ran in THIS directory (written by the post-identity hook).
-# Surfacing its existence — but NOT the bare UUID — is ownership-grounded.
+# Per ontology v2 (docs/ontology/identity.md in unitares repo): the cached
+# UUID identifies a *prior process-instance* that ran in this workspace.
+# It is NOT a resume credential — process-instance continuity ended when
+# that process ended. The only honest use is as a *lineage candidate*: if
+# this fresh process inherits its work, declare `parent_agent_id=<UUID>`.
 # ---------------------------------------------------------------------------
-WORKSPACE_RESUME_HINT=""
+WORKSPACE_LINEAGE_HINT=""
 WORKSPACE_CACHE="${PWD}/.unitares/session.json"
 if [[ -f "${WORKSPACE_CACHE}" ]]; then
-  WORKSPACE_RESUME_HINT=$(python3 - "${WORKSPACE_CACHE}" <<'PY' 2>/dev/null || true
+  WORKSPACE_LINEAGE_HINT=$(python3 - "${WORKSPACE_CACHE}" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path
 
@@ -107,22 +109,22 @@ try:
 except Exception:
     sys.exit(0)
 
-if not data.get("continuity_token"):
+uuid = (data.get("uuid") or "").strip()
+if not uuid:
     sys.exit(0)
 
-label = data.get("display_name") or data.get("agent_id") or ""
 ts = data.get("updated_at", "")
 date_part = ts[:10] if ts else ""
 suffix = f" (last active {date_part})" if date_part else ""
 print(
-    "This workspace has a prior continuity_token cached at "
-    "./.unitares/session.json"
-    + (f" for {label}" if label else "")
-    + suffix
-    + ". To resume that identity, call:\n"
-    "    onboard(continuity_token=<value from ./.unitares/session.json>)\n"
-    "Otherwise call onboard(force_new=true) to mint a fresh identity for "
-    "this run — a bare onboard() can pin-resume an unrelated prior agent."
+    "Lineage candidate: this workspace was last run by process-instance "
+    f"`{uuid}`" + suffix + ".\n"
+    "If this new process inherits from it (continuing its work, building on "
+    "its conclusions), declare lineage in your first onboard call:\n"
+    f"    onboard(force_new=true, parent_agent_id=\"{uuid}\", "
+    "spawn_reason=\"new_session\")\n"
+    "You are not that process; declaring lineage is honest, claiming "
+    "UUID-continuity is not."
 )
 PY
 )
@@ -145,27 +147,36 @@ else
   CONTEXT="UNITARES Governance: ONLINE
 
 No identity has been created on your behalf. Your MCP stdio transport is
-unbound. As your first governance tool call, invoke:
+unbound. Per the v2 identity ontology (docs/ontology/identity.md in the
+unitares repo), each process-instance is its own subject — process-instance
+continuity is the only earned continuity layer that survives a process
+boundary, and your process is fresh. The honest first call is:
 
-    onboard(purpose=\"<what you're doing>\", force_new=true)
+    onboard(force_new=true, spawn_reason=\"new_session\",
+            purpose=\"<what you're doing>\")
 
-\`force_new=true\` is load-bearing: without it, the server may pin-resume
-a prior agent's identity by IP:UA fingerprint alone on shared hosts (see
-PATH 2 observation in the UNITARES server). Pass it whenever you do NOT
-have a continuity_token for this workspace.
+If this process inherits work from a prior process-instance (e.g. continuing
+a session whose UUID you know, or whose lineage candidate appears below),
+add \`parent_agent_id=<that UUID>\`. Lineage is the honest cross-process
+bond — declare it; do not claim UUID-continuity you did not earn.
 
-The post-identity hook records UUID + continuity_token locally so follow-up
-tool calls (/checkin, auto-checkin on edits) can find your session.
+The post-identity hook records your UUID locally so follow-up tool calls
+(/checkin, auto-checkin on edits) can find your session.
 
 If you need to recover a specific prior identity by UUID, that is an
 operator action — run /diagnose for guided recovery rather than guessing
 a UUID."
 
-  if [[ -n "${WORKSPACE_RESUME_HINT}" ]]; then
+  if [[ -n "${WORKSPACE_LINEAGE_HINT}" ]]; then
     CONTEXT="${CONTEXT}
 
-${WORKSPACE_RESUME_HINT}"
+${WORKSPACE_LINEAGE_HINT}"
   fi
+
+  CONTEXT="${CONTEXT}
+
+Reference: docs/ontology/identity.md in the unitares repo (v2 ontology;
+five-layer taxonomy of continuity)."
 
   if [[ -n "${SKILL_CONTENT}" ]]; then
     CONTEXT="${CONTEXT}

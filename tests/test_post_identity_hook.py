@@ -77,6 +77,12 @@ def _mcp_response_list(uuid="u-123", agent_id="Test_Agent", sid="agent-abc",
 
 class TestPostIdentityRecordsResponse:
     def test_onboard_response_writes_slotted_cache(self, tmp_path):
+        """Post-S11 contract: cache is lineage-only (uuid + agent_id +
+        parent_agent_id + updated_at + schema). continuity_token and
+        client_session_id are deliberately NOT mirrored into the
+        plugin-internal workspace cache (see docs/ontology/plan.md S11
+        and docs/ontology/identity.md in the unitares repo).
+        """
         slot = "session-xyz-1234"
         hook_input = {
             "session_id": slot,
@@ -90,9 +96,14 @@ class TestPostIdentityRecordsResponse:
         cache = _read_session_cache(tmp_path, slot)
         assert cache["uuid"] == "u-onboard-1"
         assert cache["agent_id"] == "Test_Agent"
-        assert cache["client_session_id"] == "agent-abc"
-        assert cache["continuity_token"] == "v1.tok"
+        assert cache["schema"] == 2, "should stamp schema=2 (lineage-only cache)"
         assert "updated_at" in cache, "should stamp updated_at"
+        # Lineage-only enforcement: forbidden v1 resume-credential fields
+        # must NOT appear in the cache, even when present in the response.
+        assert "continuity_token" not in cache
+        assert "client_session_id" not in cache
+        assert "session_resolution_source" not in cache
+        assert "continuity_token_supported" not in cache
 
     def test_identity_response_writes_slotted_cache(self, tmp_path):
         hook_input = {
@@ -199,7 +210,8 @@ class TestPostIdentityResilience:
         assert result.returncode == 0
         cache = _read_session_cache(tmp_path, "slot-list")
         assert cache["uuid"] == "u-list-1"
-        assert cache["continuity_token"] == "v1.tok"
+        # Post-S11: continuity_token is NOT mirrored into the cache.
+        assert "continuity_token" not in cache
 
     def test_bound_identity_uuid_recovered_on_resume(self, tmp_path):
         """identity(resume=true) may return bound_identity dict instead of top-level uuid."""
