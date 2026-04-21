@@ -8,6 +8,26 @@ Stores lightweight continuity state in:
 
 This helper is intentionally small and dependency-free so Claude hooks, Codex
 commands, and other thin clients can share one cache format.
+
+Session-cache schema versions
+-----------------------------
+
+* v1 (pre-S11): ``continuity_token`` was written by ``hooks/post-identity``
+  and treated by ``hooks/session-start`` as a resume credential. Under the
+  identity ontology (``unitares/docs/ontology/identity.md``), this
+  performatively claimed cross-process-instance continuity without earning
+  it. v1 caches may still exist on disk; the token field is treated as
+  read-only legacy — downstream readers must not promote it back into a
+  resume suggestion.
+* v2 (post-S11): ``hooks/post-identity`` writes
+  ``schema_version: 2`` and empties ``continuity_token``. The cache's UUID
+  is surfaced by the next session's ``session-start`` hook as a
+  ``parent_agent_id`` *lineage candidate* — a predecessor the fresh
+  process-instance declares it inherits from, not an identity it resumes.
+
+This helper itself is schema-agnostic (it marshals any JSON dict). The
+schema contract lives at the hook layer; this docstring records it for
+readers who grep for ``schema_version`` or ``continuity_token`` here.
 """
 
 from __future__ import annotations

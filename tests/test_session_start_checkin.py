@@ -218,34 +218,73 @@ class TestNoCrossInstanceUuidEnumeration:
         assert "Recent session UUIDs on this host" not in ctx
 
 
-class TestWorkspaceLocalContinuity:
-    """The workspace-local cache (./.unitares/session.json in CWD) belongs
-    to THIS tab — written by the post-identity hook on a prior run in this
-    directory. Surfacing it as a self-resume hint is ownership-grounded and
-    safe: an agent in workspace X can only see workspace X's prior identity.
+class TestWorkspaceLocalLineage:
+    """Under the identity ontology (S11, unitares/docs/ontology/identity.md),
+    the workspace-local cache surfaces the prior process-instance's UUID as
+    a *lineage candidate* — the predecessor the fresh process can declare
+    via ``parent_agent_id`` — not as a resume credential.
+
+    The cached UUID is safe to surface: a fresh process-instance in this
+    workspace can only see this workspace's prior instance, and the
+    declarative form (``force_new=true`` + ``parent_agent_id=<uuid>``) mints
+    a NEW governance-identity rather than claiming the old one. That
+    distinguishes it from ``identity(agent_uuid=<uuid>, resume=true)``,
+    which remains absent from the default menu (hijack vector).
     """
 
-    def test_surfaces_workspace_continuity_token_when_present(self, tmp_path):
+    def test_surfaces_workspace_lineage_candidate_when_present(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".unitares").mkdir()
         (workspace / ".unitares" / "session.json").write_text(json.dumps({
             "uuid": "ffffffff-1111-2222-3333-444444444444",
             "agent_id": "Claude_Workspace_X",
-            "continuity_token": "v1.fake-token-payload.signature",
+            "display_name": "Claude_Workspace_X",
+            "continuity_token": "",
+            "schema_version": 2,
             "updated_at": "2026-04-20T00:00:00+00:00",
         }))
 
         stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
         ctx = json.loads(stdout).get("additional_context", "")
 
-        # The hint must point at this workspace's prior continuity_token,
-        # not at any UUID-by-string.
-        assert "continuity_token" in ctx
-        assert "this workspace" in ctx.lower() or "workspace" in ctx.lower()
-        # The bare UUID must not be displayed — that's the hijack-shaped
-        # surface. Only the existence of a continuity token is mentioned.
-        assert "ffffffff-1111-2222-3333-444444444444" not in ctx
+        # Workspace context is surfaced.
+        assert "workspace" in ctx.lower()
+        # The prior UUID appears — as a lineage anchor, not a resume target.
+        assert "ffffffff-1111-2222-3333-444444444444" in ctx
+        assert "parent_agent_id" in ctx
+        # The retired resume-by-token framing must be gone.
+        assert "onboard(continuity_token=" not in ctx
+        assert "To resume that identity" not in ctx
+        # UUID-resume framing remains absent (hijack vector).
+        assert "identity(agent_uuid=" not in ctx
+        assert "resume=true" not in ctx
+
+    def test_legacy_v1_cache_with_token_still_surfaces_as_lineage(self, tmp_path):
+        """v1 cache files (pre-S11) carried a populated ``continuity_token``.
+        The session-start hook must treat them as v2 lineage anchors —
+        surfacing the UUID for ``parent_agent_id`` declaration, and NOT
+        promoting the legacy token back into a resume credential.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "uuid": "eeeeeeee-1111-2222-3333-555555555555",
+            "agent_id": "Legacy_V1_Agent",
+            "continuity_token": "v1.legacy-token-should-be-ignored",
+            "updated_at": "2026-04-10T00:00:00+00:00",
+        }))
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # UUID surfaces as lineage candidate.
+        assert "eeeeeeee-1111-2222-3333-555555555555" in ctx
+        assert "parent_agent_id" in ctx
+        # Legacy token must NOT be promoted into the banner.
+        assert "v1.legacy-token-should-be-ignored" not in ctx
+        assert "onboard(continuity_token=" not in ctx
 
     def test_no_workspace_cache_means_no_resume_hint(self, tmp_path):
         workspace = tmp_path / "workspace"
