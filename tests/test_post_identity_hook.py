@@ -91,7 +91,11 @@ class TestPostIdentityRecordsResponse:
         assert cache["uuid"] == "u-onboard-1"
         assert cache["agent_id"] == "Test_Agent"
         assert cache["client_session_id"] == "agent-abc"
-        assert cache["continuity_token"] == "v1.tok"
+        # S11 (identity ontology): hook no longer writes continuity_token to
+        # the cache. The UUID is the lineage anchor; the token is a
+        # server-resume credential the cache must not stylize as its own.
+        assert cache["continuity_token"] == ""
+        assert cache["schema_version"] == 2
         assert "updated_at" in cache, "should stamp updated_at"
 
     def test_identity_response_writes_slotted_cache(self, tmp_path):
@@ -199,7 +203,10 @@ class TestPostIdentityResilience:
         assert result.returncode == 0
         cache = _read_session_cache(tmp_path, "slot-list")
         assert cache["uuid"] == "u-list-1"
-        assert cache["continuity_token"] == "v1.tok"
+        # S11: token stripped regardless of wire shape (bare-list or
+        # dict-wrapped). Cache is a lineage anchor, not a resume credential.
+        assert cache["continuity_token"] == ""
+        assert cache["schema_version"] == 2
 
     def test_bound_identity_uuid_recovered_on_resume(self, tmp_path):
         """identity(resume=true) may return bound_identity dict instead of top-level uuid."""

@@ -89,15 +89,25 @@ uuid_val = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
 if not uuid_val:
     sys.exit(0)
 
+# Identity ontology (unitares/docs/ontology/identity.md, §S11): the
+# workspace cache is a lineage anchor, not a resume credential. We stamp
+# identifying fields (UUID, agent_id, display_name) so the next process-
+# instance's session-start hook can surface the UUID as a parent_agent_id
+# candidate — but we no longer write continuity_token. `continuity_token: ""`
+# is included explicitly so a --merge write clears any legacy v1 value a
+# prior onboard_helper path may have left in the cache. `schema_version: 2`
+# marks the post-S11 shape; v1 caches (no schema_version, token present)
+# are treated as read-only legacy — readers ignore their token field.
 payload = {
     "uuid": uuid_val,
     "agent_id": resp.get("agent_id", "") or (resp.get("bound_identity") or {}).get("agent_id", ""),
     "client_session_id": resp.get("client_session_id", ""),
-    "continuity_token": resp.get("continuity_token", ""),
+    "continuity_token": "",
     "display_name": resp.get("display_name", "") or (resp.get("bound_identity") or {}).get("display_name", ""),
     "continuity_token_supported": resp.get("continuity_token_supported", False),
     "session_resolution_source": resp.get("session_resolution_source", ""),
     "slot": session_id,
+    "schema_version": 2,
 }
 # Emit session_id on stdout line 1, JSON payload on line 2 — the shell
 # splits them to pass --slot and --json separately.

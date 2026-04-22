@@ -218,6 +218,13 @@ def run_onboard(
     cached_uuid = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
     if cached_uuid and not force_new:
         identity_args: dict[str, Any] = {"agent_uuid": cached_uuid, "resume": True}
+        # S1 deprecation (identity ontology, docs/ontology/plan.md §S1):
+        # `continuity_token` is a compatibility surface for external
+        # clients; plugin-internal flows should declare lineage
+        # (parent_agent_id) on fresh onboard rather than resume via token.
+        # The token field is empty on v2 caches written by hooks/post-
+        # identity — only legacy v1 caches or external-client writes
+        # populate it here.
         cached_token = (cache.get("continuity_token") or "").strip()
         if cached_token:
             identity_args["continuity_token"] = cached_token
