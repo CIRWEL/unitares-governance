@@ -4,6 +4,8 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
+license: MIT
+compatibility: Requires UNITARES governance MCP server (gov.cirwel.org or local http://127.0.0.1:8767/mcp/)
 last_verified: "2026-04-17"
 freshness_days: 14
 source_files:

@@ -4,6 +4,8 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and autonomous governance
   actions as a living Discord server.
+license: MIT
+compatibility: Requires UNITARES governance MCP server (gov.cirwel.org or local http://127.0.0.1:8767/mcp/)
 last_verified: "2026-04-17"
 freshness_days: 14
 source_files:

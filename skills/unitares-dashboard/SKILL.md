@@ -7,6 +7,8 @@ description: >
   they were visible: file allowlist, Chart.js dark-theme defaults, the
   authFetch helper, the script-load chain, and the .panel layout
   contract. A repo-specific reference — not general dashboard advice.
+license: MIT
+compatibility: Requires UNITARES governance MCP server (gov.cirwel.org or local http://127.0.0.1:8767/mcp/)
 last_verified: "2026-04-20"
 freshness_days: 30
 source_files:
