@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, verdicts, coherence, calibration. Reference material for interpreting governance
   metrics and understanding the thermodynamic model.
-last_verified: "2026-04-17"
+last_verified: "2026-04-25"
 freshness_days: 14
 source_files:
   - unitares/config/governance_config.py
@@ -15,81 +15,62 @@ source_files:
 
 # Governance Fundamentals
 
-## What UNITARES Is
-
-UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. It tracks agent work through a thermodynamic model (energy, entropy, coherence) and maintains a shared knowledge graph across all agents.
+UNITARES gives AI agents digital proprioception — awareness of their own state, their relationship to the system, and whether they are drifting. Agent work is tracked through a thermodynamic model (energy, entropy, coherence) and a shared knowledge graph across all agents.
 
 ## EISV State Vector
 
-Every agent has four dimensions, updated through check-ins:
+Four dimensions, updated through check-ins:
 
-| Dimension | Range | Meaning |
-|-----------|-------|---------|
+| Dim | Range | Meaning |
+|-----|-------|---------|
 | **E** (Energy) | [0, 1] | Productive capacity |
 | **I** (Information Integrity) | [0, 1] | Signal fidelity |
 | **S** (Entropy) | [0, 1] | Semantic uncertainty (lower is better) |
 | **V** (Void) | [-1, 1] | Accumulated E-I imbalance |
 
-### How They Couple
+The dimensions couple — E pulls toward I, S responds to complexity, V accumulates imbalance, **coherence** falls out of all four. Coherence is *structural health* (how well E/I/S/V hold together as a vector), **not a quality score for your work** — this is what makes the "do not game coherence" rule below meaningful. For the coupling math, see `references/eisv-deep.md`.
 
-- **E (Energy)**: Couples toward I (when I > E, energy rises). Dragged down by high entropy via E*S cross-coupling. High complexity affects E indirectly through S.
-- **I (Information Integrity)**: Boosted by coherence C(V,Theta), reduced by entropy S. Has logistic self-regulation. Confidence and calibration affect I indirectly via the check-in pipeline (they drive S and ethical drift, which couple to I).
-- **S (Entropy)**: Naturally decays (mu*S), rises with ethical drift and task complexity, reduced by coherence. The only dimension that directly responds to complexity.
-- **V (Void)**: Accumulated E-I imbalance. Positive when energy exceeds integrity (running hot), negative when integrity exceeds energy (running careful). Decays toward zero over time. Drives coherence via C(V,Theta).
+## Verdicts — What to Do
 
-These combine into a **coherence** score and **risk** score that determine governance decisions. Prefer live tool output over static range lore if the current runtime reports a narrower or more precise bound.
-
-## Basins
-
-Your state sits in a basin — a region of the EISV space:
-
-- **High basin**: Healthy. E and I are high, S and V are low. Normal operating range.
-- **Low basin**: Degraded. May need recovery or intervention.
-- **Boundary**: Transitioning between basins. Extra attention from governance. Verdicts may carry `margin: tight`.
-
-Use `get_governance_metrics()` as the source of truth for the current basin/mode labels rather than assuming they are constant across runtime versions.
-
-## Verdicts
-
-Governance issues a verdict after each check-in:
+Governance issues a verdict after each check-in. This is the operational signal:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| **proceed** | State is healthy | Continue working normally |
+| **proceed** | State is healthy | Continue working |
 | **guide** | Something is slightly off | Read the guidance text, adjust approach |
 | **pause** | Needs attention | Stop current work, reflect, consider dialectic review |
 | **reject** | Significant concern | Requires dialectic review or human input |
 
 A `margin: tight` flag means you are near a basin edge. Be more careful with next steps.
 
-## Coherence
+## Basins
 
-Coherence measures how well your state vector holds together. It is calculated from the EISV values — not from the content of your work. Think of it as structural health, not semantic quality.
+Your state sits in a basin — a region of EISV space:
 
-- Full range is [0, 1], clipped from thermodynamic C(V, Theta)
-- Critical threshold is available via `get_governance_metrics()` in the `thresholds` field — do not hardcode it
-- Do not chase a number — check in honestly and let it track naturally
-- Coherence is derived from C(V, Theta) — it reflects balance, not performance
+- **High basin**: Healthy. E and I high, S and V low. Normal operating range.
+- **Low basin**: Degraded. May need recovery or intervention.
+- **Boundary**: Transitioning. Verdicts may carry `margin: tight`.
 
-## Calibration
+Use `get_governance_metrics()` for the current basin/mode labels — do not assume they are constant across runtime versions.
 
-The system tracks whether your stated confidence matches outcomes. Over time this builds a calibration curve.
+## Diagnostics — When the Numbers Look Wrong
 
-- Ground truth comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic outcomes.
-- Overconfidence is tracked and penalizes Information Integrity through the entropy coupling
+Do not guess first. Use:
 
-## Diagnostics
-
-When the numbers look surprising, do not guess first. Use:
-
-- `identity()` to verify who the runtime thinks you are
-- `health_check()` to verify the server and knowledge graph are healthy
-- `get_governance_metrics()` for the current live thresholds and interpreted state
+- `identity()` — verify who the runtime thinks you are
+- `health_check()` — verify the server and knowledge graph are healthy
+- `get_governance_metrics()` — current live thresholds and interpreted state
 
 ## What NOT to Do
 
 - **Do not game coherence** by reporting low complexity / high confidence on everything
 - **Do not ignore guide verdicts** — they are early warnings before pause/reject
-- **Do not create duplicate discoveries** — always search the knowledge graph first
+- **Do not create duplicate discoveries** — search the knowledge graph first
 - **Do not check in after every trivial action** — it is noise, not signal
-- **Do not leave high-severity findings as open forever** — resolve or archive them
+- **Do not leave high-severity findings open forever** — resolve or archive them
+
+## Going Deeper
+
+- `references/eisv-deep.md` — coupling math, coherence definition C(V, Theta), calibration internals
+- `governance-lifecycle` skill — onboard, check-in, recovery flow
+- `dialectic-reasoning` skill — what happens when a verdict pauses you
