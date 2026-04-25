@@ -81,26 +81,64 @@ ${SKILL_CONTENT}"
 fi
 
 # ---------------------------------------------------------------------------
-# Workspace-local lineage probe (./.unitares/session.json in CWD).
+# Workspace-local lineage probe — slot-scoped only.
 #
 # IMPORTANT: we deliberately do NOT enumerate ~/.unitares/session-*.json.
 # That glob produced an unfiltered cross-instance UUID menu, which — paired
 # with an `identity(agent_uuid=..., resume=true)` suggestion — invited
 # fresh agents to pattern-match on model name and resume into other
-# instances' identities. See KG bug 2026-04-20T00:09:51 and the
-# identity-honesty invariants in operator memory.
+# instances' identities. See KG bug 2026-04-20T00:09:51.
 #
-# The workspace-local cache, by contrast, is owned by the process-instance
-# that previously ran in THIS directory. Under the identity ontology
-# (unitares/docs/ontology/identity.md), its UUID is surfaced as a *lineage
-# candidate* — the predecessor this fresh process can declare via
-# `parent_agent_id` — NOT as a resume credential. Fresh process-instances
-# mint fresh governance-identity by default; memory, KG notes, and
-# self-knowledge persist across instances, identity does not.
+# We also deliberately do NOT read the bare ./.unitares/session.json.
+# The "owned by the process-instance that previously ran in THIS directory"
+# assumption breaks when the workspace is shared across concurrent claude
+# processes — notably the discord-dispatch case, where threads defaulting
+# to cwd=HOME all shared /Users/cirwel/.unitares/session.json and silently
+# funneled onto whichever agent last wrote the cache. That's the flaw
+# this hook is tightening against; the dispatch-side fix (per-thread
+# scratch dirs) is complementary, not redundant.
+#
+# The slot-scoped cache ./.unitares/session-<claude_session_id>.json, by
+# contrast, is owned by one specific claude process session. On --resume
+# it matches; a fresh session writes its own. Under the identity ontology
+# (unitares/docs/ontology/identity.md) its UUID is surfaced as a *lineage
+# candidate* — the predecessor this fresh process declares via
+# `parent_agent_id` — NOT as a resume credential.
 # ---------------------------------------------------------------------------
 WORKSPACE_LINEAGE_HINT=""
-WORKSPACE_CACHE="${PWD}/.unitares/session.json"
-if [[ -f "${WORKSPACE_CACHE}" ]]; then
+CLAUDE_SESSION_ID=""
+# Claude Code sends the hook event as JSON on stdin, including session_id.
+if [[ ! -t 0 ]]; then
+  SESSION_START_STDIN=$(cat 2>/dev/null) || SESSION_START_STDIN=""
+  if [[ -n "${SESSION_START_STDIN}" ]]; then
+    CLAUDE_SESSION_ID=$(python3 - "${SESSION_START_STDIN}" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    print((data.get("session_id") or "").strip())
+except Exception:
+    pass
+PY
+    )
+  fi
+fi
+
+WORKSPACE_CACHE=""
+if [[ -n "${CLAUDE_SESSION_ID}" ]]; then
+  # Match session_cache.py _slot_suffix: alnum + [-_], cap at 64 chars.
+  SAFE_SLOT=$(python3 - "${CLAUDE_SESSION_ID}" <<'PY' 2>/dev/null || true
+import sys
+raw = sys.argv[1]
+safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in raw)
+print(safe[:64])
+PY
+  )
+  if [[ -n "${SAFE_SLOT}" ]]; then
+    WORKSPACE_CACHE="${PWD}/.unitares/session-${SAFE_SLOT}.json"
+  fi
+fi
+
+if [[ -n "${WORKSPACE_CACHE}" && -f "${WORKSPACE_CACHE}" ]]; then
   WORKSPACE_LINEAGE_HINT=$(python3 - "${WORKSPACE_CACHE}" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path

@@ -67,11 +67,13 @@ class _ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def _run_hook(tmp_path, server_url, extra_env=None, cwd=None):
+def _run_hook(tmp_path, server_url, extra_env=None, cwd=None, claude_session_id=None):
     """Run session-start with a given server URL and return (stdout, tool_calls).
 
     cwd defaults to tmp_path. Pass a different cwd to test workspace-local
-    continuity cache discovery independently of HOME.
+    continuity cache discovery independently of HOME. claude_session_id is
+    placed on stdin in the Claude Code hook envelope so the hook can find
+    the slot-scoped workspace cache.
     """
     RecordingHandler.calls = []
     workdir = cwd if cwd is not None else tmp_path
@@ -87,12 +89,14 @@ def _run_hook(tmp_path, server_url, extra_env=None, cwd=None):
     if extra_env:
         env.update(extra_env)
 
+    stdin_payload = {"session_id": claude_session_id} if claude_session_id else {}
+
     hook = PLUGIN_ROOT / "hooks" / "session-start"
     result = subprocess.run(
         [str(hook)],
         env=env,
         cwd=str(workdir),
-        input="{}",
+        input=json.dumps(stdin_payload),
         text=True,
         capture_output=True,
         timeout=20,
@@ -224,19 +228,20 @@ class TestWorkspaceLocalLineage:
     a *lineage candidate* — the predecessor the fresh process can declare
     via ``parent_agent_id`` — not as a resume credential.
 
-    The cached UUID is safe to surface: a fresh process-instance in this
-    workspace can only see this workspace's prior instance, and the
-    declarative form (``force_new=true`` + ``parent_agent_id=<uuid>``) mints
-    a NEW governance-identity rather than claiming the old one. That
-    distinguishes it from ``identity(agent_uuid=<uuid>, resume=true)``,
-    which remains absent from the default menu (hijack vector).
+    Slot-scoped only: the bare ``./.unitares/session.json`` is a
+    cross-instance artifact when workspaces are shared (e.g. dispatch
+    threads defaulting to cwd=HOME) and must not be read. Only
+    ``./.unitares/session-<claude_session_id>.json`` — written by the
+    post-identity hook with the current session's slot — is a trustworthy
+    lineage anchor.
     """
 
-    def test_surfaces_workspace_lineage_candidate_when_present(self, tmp_path):
+    def test_surfaces_lineage_from_matching_slot_scoped_cache(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".unitares").mkdir()
-        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+        slot = "claude-session-xyz-123"
+        (workspace / ".unitares" / f"session-{slot}.json").write_text(json.dumps({
             "uuid": "ffffffff-1111-2222-3333-444444444444",
             "agent_id": "Claude_Workspace_X",
             "display_name": "Claude_Workspace_X",
@@ -245,7 +250,7 @@ class TestWorkspaceLocalLineage:
             "updated_at": "2026-04-20T00:00:00+00:00",
         }))
 
-        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace, claude_session_id=slot)
         ctx = json.loads(stdout).get("additional_context", "")
 
         # Workspace context is surfaced.
@@ -260,36 +265,78 @@ class TestWorkspaceLocalLineage:
         assert "identity(agent_uuid=" not in ctx
         assert "resume=true" not in ctx
 
-    def test_legacy_v1_cache_with_token_still_surfaces_as_lineage(self, tmp_path):
-        """v1 cache files (pre-S11) carried a populated ``continuity_token``.
-        The session-start hook must treat them as v2 lineage anchors —
-        surfacing the UUID for ``parent_agent_id`` declaration, and NOT
-        promoting the legacy token back into a resume credential.
+    def test_bare_session_json_is_not_surfaced(self, tmp_path):
+        """The bare ``./.unitares/session.json`` is a legacy/shared artifact.
+        Dispatch threads that fall back to cwd=HOME share it, so surfacing
+        its UUID as "workspace lineage" mis-claims continuity and funnels
+        concurrent threads onto one predecessor. The hook must ignore it.
         """
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".unitares").mkdir()
         (workspace / ".unitares" / "session.json").write_text(json.dumps({
             "uuid": "eeeeeeee-1111-2222-3333-555555555555",
-            "agent_id": "Legacy_V1_Agent",
+            "agent_id": "Shared_Cache_Agent",
             "continuity_token": "v1.legacy-token-should-be-ignored",
             "updated_at": "2026-04-10T00:00:00+00:00",
         }))
 
-        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace, claude_session_id="fresh-session")
         ctx = json.loads(stdout).get("additional_context", "")
 
-        # UUID surfaces as lineage candidate.
-        assert "eeeeeeee-1111-2222-3333-555555555555" in ctx
-        assert "parent_agent_id" in ctx
-        # Legacy token must NOT be promoted into the banner.
+        # Bare-cache UUID must NOT appear — it's not a trustworthy lineage
+        # anchor for this specific process-instance.
+        assert "eeeeeeee-1111-2222-3333-555555555555" not in ctx
+        assert "Shared_Cache_Agent" not in ctx
         assert "v1.legacy-token-should-be-ignored" not in ctx
-        assert "onboard(continuity_token=" not in ctx
+
+    def test_slot_mismatch_does_not_surface_other_sessions_lineage(self, tmp_path):
+        """Slot scoping must actually scope. A cache file written by a
+        different claude session in the same workspace (different session_id)
+        must not be surfaced as this session's lineage.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session-other-slot.json").write_text(json.dumps({
+            "uuid": "dddddddd-1111-2222-3333-666666666666",
+            "agent_id": "Other_Session",
+            "schema_version": 2,
+            "updated_at": "2026-04-20T00:00:00+00:00",
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="my-slot-not-other"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "dddddddd-1111-2222-3333-666666666666" not in ctx
+        assert "Other_Session" not in ctx
+
+    def test_no_session_id_means_no_lineage_hint(self, tmp_path):
+        """Without a claude_session_id on stdin, the hook has no way to pick
+        a trustworthy slot-scoped cache, so it must surface nothing.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "uuid": "cccccccc-1111-2222-3333-777777777777",
+            "agent_id": "Bare_Cache",
+            "updated_at": "2026-04-20T00:00:00+00:00",
+        }))
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)  # no session_id
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "cccccccc-1111-2222-3333-777777777777" not in ctx
 
     def test_no_workspace_cache_means_no_resume_hint(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        stdout, _ = _serve_and_run(tmp_path, cwd=workspace)
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="fresh-session"
+        )
         ctx = json.loads(stdout).get("additional_context", "")
         # No workspace cache → no resume hint block.
         # The phrase "continuity_token" may still appear in the always-on
