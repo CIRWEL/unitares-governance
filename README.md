@@ -76,7 +76,20 @@ The principle is simple: prefer high-signal governance over high-frequency gover
 1. A running UNITARES governance server
 2. The governance MCP endpoint reachable by the client
 
-Example local endpoint:
+This repo is a **client adapter only** — it does not include the governance engine. You need a server running before any of these commands or skills do anything useful.
+
+**Easiest server bring-up — Docker Compose:**
+
+```bash
+git clone https://github.com/CIRWEL/unitares.git
+cd unitares
+docker compose up
+# server now at http://localhost:8767/mcp/
+```
+
+That single command brings up Postgres+AGE+pgvector, Redis, and the governance server. The Pi/Lumen embodiment side is optional — governance runs standalone. For bare-metal install (Homebrew Postgres, native AGE compile) see [unitares/README.md](https://github.com/CIRWEL/unitares#installation).
+
+Once the server is up, point this plugin's MCP client at it:
 
 ```json
 {
@@ -88,6 +101,8 @@ Example local endpoint:
   }
 }
 ```
+
+If your server is on a different host or port, set `UNITARES_SERVER_URL` (see Configuration below).
 
 ## Configuration
 
