@@ -138,6 +138,28 @@ PY
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Compact mode — when this workspace already has a fresh slot-scoped cache
+# (mtime < 1h), the agent has almost certainly seen the full Fundamentals
+# excerpt and the long onboard-prose this hour. Per-turn SessionStart
+# resume events fire frequently in normal Claude Code use; re-injecting
+# the full ~3KB context every fire is repetition without information.
+# We collapse to a one-line prompt and skip the Fundamentals block.
+#
+# The trigger is intentionally workspace-scoped — fresh workspaces
+# (no cache yet) get the full onboarding prose, which is the right
+# default for an agent that hasn't seen it.
+# ---------------------------------------------------------------------------
+COMPACT_MODE=0
+COMPACT_TTL_SECS="${UNITARES_HOOK_COMPACT_TTL:-3600}"
+if [[ -n "${WORKSPACE_CACHE}" && -f "${WORKSPACE_CACHE}" ]]; then
+  CACHE_MTIME=$(stat -f %m "${WORKSPACE_CACHE}" 2>/dev/null || echo 0)
+  CACHE_AGE_SECS=$(( $(date +%s) - CACHE_MTIME ))
+  if (( CACHE_MTIME > 0 && CACHE_AGE_SECS >= 0 && CACHE_AGE_SECS < COMPACT_TTL_SECS )); then
+    COMPACT_MODE=1
+  fi
+fi
+
 if [[ -n "${WORKSPACE_CACHE}" && -f "${WORKSPACE_CACHE}" ]]; then
   WORKSPACE_LINEAGE_HINT=$(python3 - "${WORKSPACE_CACHE}" <<'PY' 2>/dev/null || true
 import json, sys
@@ -191,7 +213,17 @@ if [[ -z "${HEALTH_STATUS}" ]]; then
 ${SKILL_CONTENT}"
   fi
 else
-  CONTEXT="UNITARES Governance: ONLINE
+  if [[ "${COMPACT_MODE}" == "1" ]]; then
+    # Compact prose: assumes the agent saw the full prompt + Fundamentals
+    # excerpt earlier this hour (workspace cache mtime < TTL). Keep
+    # `force_new=true` (force_new pin-resume guard, regression-tested),
+    # the ontology pointer (so a forgetful agent can re-read), and the
+    # operator escape hatch — drop everything else.
+    CONTEXT="UNITARES Governance: ONLINE
+Fresh process-instance, MCP stdio unbound. Onboard with \`force_new=true\` (declare \`parent_agent_id\` if continuing prior workspace work — see lineage hint below).
+Ontology: unitares/docs/ontology/identity.md  ·  Recovery: run /diagnose."
+  else
+    CONTEXT="UNITARES Governance: ONLINE
 
 No identity has been created on your behalf. Your MCP stdio transport is
 unbound. As your first governance tool call, invoke:
@@ -209,6 +241,7 @@ The post-identity hook records UUID locally so follow-up tool calls
 If you need to recover a specific prior identity by UUID, that is an
 operator action — run /diagnose for guided recovery rather than guessing
 a UUID."
+  fi
 
   if [[ -n "${WORKSPACE_LINEAGE_HINT}" ]]; then
     CONTEXT="${CONTEXT}
@@ -216,7 +249,10 @@ a UUID."
 ${WORKSPACE_LINEAGE_HINT}"
   fi
 
-  if [[ -n "${SKILL_CONTENT}" ]]; then
+  # Skip the Fundamentals excerpt in compact mode. The freshness warning
+  # (if any) still injects on the *next* fresh-workspace fire when the
+  # full block returns, so calibration on stale skill files isn't lost.
+  if [[ "${COMPACT_MODE}" != "1" && -n "${SKILL_CONTENT}" ]]; then
     CONTEXT="${CONTEXT}
 
 --- Governance Fundamentals (excerpt) ---
