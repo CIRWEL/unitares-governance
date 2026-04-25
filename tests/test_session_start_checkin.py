@@ -358,3 +358,139 @@ class TestSkillInjection:
         stdout, _ = _run_hook(tmp_path, "http://127.0.0.1:1")
         ctx = json.loads(stdout).get("additional_context", "")
         assert "Governance Fundamentals" in ctx
+
+
+class TestCompactMode:
+    """When the slot-scoped workspace cache is fresh (mtime within TTL), the
+    hook collapses the full Fundamentals + onboard prose to a one-line
+    prompt. Per-turn SessionStart fires legitimately under the v2 identity
+    ontology — re-injecting ~3KB of unchanged context every fire is
+    repetition without information.
+    """
+
+    def _make_fresh_cache(self, workspace, slot, uuid="aaaa1111-2222-3333-4444-555555555555"):
+        (workspace / ".unitares").mkdir(exist_ok=True)
+        cache = workspace / ".unitares" / f"session-{slot}.json"
+        cache.write_text(json.dumps({
+            "uuid": uuid,
+            "agent_id": "Prior_Agent",
+            "display_name": "Prior_Agent",
+            "schema_version": 2,
+            "updated_at": "2026-04-25T17:00:00+00:00",
+        }))
+        return cache
+
+    def test_fresh_cache_triggers_compact_prose(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        slot = "claude-fresh-slot"
+        self._make_fresh_cache(workspace, slot)
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace, claude_session_id=slot)
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Compact prose markers
+        assert "Fresh process-instance, MCP stdio unbound" in ctx
+        assert "force_new=true" in ctx  # security regression guard still applies
+        assert "/diagnose" in ctx  # operator escape hatch retained
+        # The full-prose marker is gone
+        assert "No identity has been created on your behalf" not in ctx
+        # Fundamentals excerpt is suppressed in compact mode
+        assert "Governance Fundamentals" not in ctx
+
+    def test_fresh_cache_still_surfaces_lineage_hint(self, tmp_path):
+        """Compact mode drops the boilerplate but keeps the per-instance
+        lineage signal — that's specific information, not repetition."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        slot = "claude-fresh-slot-2"
+        self._make_fresh_cache(workspace, slot, uuid="bbbb1111-2222-3333-4444-666666666666")
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace, claude_session_id=slot)
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "bbbb1111-2222-3333-4444-666666666666" in ctx
+        assert "parent_agent_id" in ctx
+
+    def test_stale_cache_falls_back_to_full_prose(self, tmp_path):
+        """When the cache mtime is beyond the TTL, the agent has likely
+        rotated context out — re-inject the full Fundamentals and prose."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        slot = "claude-stale-slot"
+        cache = self._make_fresh_cache(workspace, slot)
+        # Force mtime to 2 hours ago
+        old = subprocess.run(
+            ["touch", "-t", "202604251400.00", str(cache)],
+            check=True,
+        )
+
+        # Use a short TTL just to be unambiguous about the boundary.
+        stdout, _ = _serve_and_run(
+            tmp_path,
+            cwd=workspace,
+            claude_session_id=slot,
+            extra_env={"UNITARES_HOOK_COMPACT_TTL": "60"},
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Full prose markers
+        assert "No identity has been created on your behalf" in ctx
+        assert "Governance Fundamentals" in ctx
+
+    def test_no_cache_means_full_prose(self, tmp_path):
+        """A truly fresh workspace (no cache) must get the full prose —
+        compact mode is for repeat sessions, not first-time onboarding."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="never-seen-before"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+        assert "No identity has been created on your behalf" in ctx
+        assert "Governance Fundamentals" in ctx
+
+    def test_compact_ttl_is_configurable_via_env(self, tmp_path):
+        """Operators can tune the TTL via UNITARES_HOOK_COMPACT_TTL.
+        Setting it to 0 effectively disables compact mode."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        slot = "claude-ttl-slot"
+        self._make_fresh_cache(workspace, slot)
+
+        stdout, _ = _serve_and_run(
+            tmp_path,
+            cwd=workspace,
+            claude_session_id=slot,
+            extra_env={"UNITARES_HOOK_COMPACT_TTL": "0"},
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+        # TTL=0 means age (>=0) is never less than TTL → full prose returns
+        assert "No identity has been created on your behalf" in ctx
+        assert "Governance Fundamentals" in ctx
+
+    def test_compact_mode_substantially_reduces_context_size(self, tmp_path):
+        """The whole point of this mode — verify the compact path is
+        materially smaller. Threshold is generous (compact must be at
+        least 60% smaller) so future copy edits don't break the test."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        slot = "claude-size-slot"
+        self._make_fresh_cache(workspace, slot)
+
+        compact_stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id=slot
+        )
+        compact_len = len(json.loads(compact_stdout).get("additional_context", ""))
+
+        full_stdout, _ = _serve_and_run(
+            tmp_path,
+            cwd=workspace,
+            claude_session_id=slot,
+            extra_env={"UNITARES_HOOK_COMPACT_TTL": "0"},
+        )
+        full_len = len(json.loads(full_stdout).get("additional_context", ""))
+
+        assert compact_len < full_len * 0.4, (
+            f"compact={compact_len}, full={full_len} — expected >=60% reduction"
+        )
