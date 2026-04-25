@@ -28,7 +28,7 @@ Four dimensions, updated through check-ins:
 | **S** (Entropy) | [0, 1] | Semantic uncertainty (lower is better) |
 | **V** (Void) | [-1, 1] | Accumulated E-I imbalance |
 
-The dimensions couple — E pulls toward I, S responds to complexity, V accumulates imbalance, coherence falls out of all four. For the coupling math and dynamics, see `references/eisv-deep.md`.
+The dimensions couple — E pulls toward I, S responds to complexity, V accumulates imbalance, **coherence** falls out of all four. Coherence is *structural health* (how well E/I/S/V hold together as a vector), **not a quality score for your work** — this is what makes the "do not game coherence" rule below meaningful. For the coupling math, see `references/eisv-deep.md`.
 
 ## Verdicts — What to Do
 
