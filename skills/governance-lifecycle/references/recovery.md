@@ -1,20 +1,10 @@
-# Recovery and Resume Semantics
+# Recovery — When You Are Paused or Stuck
 
-Reference material for the rare lifecycle events: resuming a stored identity, recovering from a pause/reject verdict, and operator-mediated overrides. Loaded by `governance-lifecycle/SKILL.md` on demand. The day-to-day onboard/check-in/verdict loop lives in the SKILL body.
+Reference material for recovering from a `pause` or `reject` verdict. Loaded by `governance-lifecycle/SKILL.md` on demand from the verdict table. The day-to-day verdict reading lives in the SKILL body; this file is for when you actually need to *act* on a non-proceed verdict.
 
-## Resuming vs. Creating New (semantics, updated 2026-04-17)
+For the *other* kind of recovery — resuming a previously-saved identity — see `references/resume-semantics.md` instead. The two are unrelated.
 
-`name=` is a **cosmetic label**, not a resume key. Since the 2026-04-17 name-claim removal, passing `name="Same-Agent"` on a fresh session always mints a new UUID — it will not re-bind to an existing agent with that label. Resume signals, in strength order:
-
-1. **`continuity_token`** (PATH 2.8) — strongest. Signed and self-contained; carries the UUID claim and proves possession in one value. Save this from your first `onboard()` response and pass it on every subsequent `identity()` or `onboard()` call. Expires; rebinds even across session-cache invalidation.
-2. **`agent_uuid` + `continuity_token`** (PATH 0 with ownership proof) — strong. Pass them together; the server's Part C gate verifies the token's `aid` claim equals the requested `agent_uuid`. Without the matching token, this resume currently logs `[IDENTITY_STRICT]` and emits an `identity_hijack_suspected` broadcast event, and will be rejected outright once `UNITARES_IDENTITY_STRICT=strict` is promoted to default.
-3. **Active session binding** (PATH 1/2) — auto-handled by the server when you reuse the same transport session.
-
-**Do not** call `identity(agent_uuid=X, resume=true)` with a UUID you learned from somewhere else (a hook listing, another agent's check-in, a log line). That is the canonical hijack pattern: an unsigned UUID claim with no proof of ownership. The server treats every such call as suspect — see KG bug `2026-04-20T00:09:51`.
-
-Without any of the signals above, you are a new agent. That is the correct semantic, not a bug.
-
-## Recovery — When You Are Paused or Stuck
+## Recovery Options
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
@@ -24,21 +14,18 @@ Without any of the signals above, you are a new agent. That is the correct seman
 
 Recovery is not a shortcut — `self_recovery()` examines your EISV state and determines if resumption is safe. If your metrics are genuinely degraded, it will not force a resume.
 
-## Identity Diagnostics
+## What to Try First
 
-When continuity seems unclear, call `identity()` and inspect:
-
-- `identity_status`
-- `bound_identity`
-- `session_resolution_source`
-- `continuity_token_supported`
-
-Strong continuity is better than implicit continuity. If the runtime falls back to weak signals such as fingerprinting, re-onboard and resume with explicit continuity data.
+1. **Re-read the verdict text and any guidance** — the server often explains *why* it paused. The fix is usually visible.
+2. **`get_governance_metrics()`** — see which dimension(s) are degraded. Low E suggests fatigue / slowdown is appropriate; high S suggests you're in unfamiliar territory and should seek information; negative V (running careful) is rarely a problem; positive V (running hot) suggests the work is shallower than your check-ins claim.
+3. **`self_recovery()`** — only after you understand *why* you were paused. A blind retry is the canonical anti-pattern.
+4. **`request_dialectic_review()`** — when you disagree with the verdict on substantive grounds. Do not use as a re-roll.
+5. **`operator_resume_agent()`** — last resort; requires the human operator to intervene.
 
 ## Specialized Tools (rare)
 
-- `call_model()` — Delegate to a secondary LLM for analysis
-- `detect_stuck_agents()` — Find unresponsive agents
-- `submit_thesis()` / `submit_antithesis()` / `submit_synthesis()` — Dialectic participation (covered in `dialectic-reasoning` skill)
-- `export()` — Export session history
-- `knowledge()` / `agent()` / `calibration()` — Full CRUD surfaces; tool descriptions cover the parameters
+- `call_model()` — delegate to a secondary LLM for analysis
+- `detect_stuck_agents()` — find unresponsive agents (operator-facing)
+- `submit_thesis()` / `submit_antithesis()` / `submit_synthesis()` — dialectic participation (covered in `dialectic-reasoning` skill)
+- `export()` — export session history
+- `knowledge()` / `agent()` / `calibration()` — full CRUD surfaces; tool descriptions cover the parameters

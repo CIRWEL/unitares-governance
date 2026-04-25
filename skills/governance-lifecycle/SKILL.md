@@ -30,7 +30,7 @@ Returns:
 - **continuity_token** — signed proof of ownership; save this and pass it on subsequent calls
 - **client_session_id** — echo back in subsequent calls for session continuity within the same process
 
-If the runtime supports a continuity token, prefer it over re-passing the UUID. For the full PATH semantics (PATH 0 / PATH 1 / PATH 2.8) and the canonical hijack pattern to avoid, see `references/recovery.md`.
+If the runtime supports a continuity token, prefer it over re-passing the UUID. For the full PATH semantics (PATH 0 / PATH 1 / PATH 2.8) and the canonical hijack pattern to avoid, see `references/resume-semantics.md`.
 
 ## Check-ins
 
@@ -78,6 +78,7 @@ Use in every session:
 
 ## Going Deeper
 
-- `references/recovery.md` — resume semantics, pause/reject recovery, identity diagnostics, specialized tools
+- `references/recovery.md` — what to do after a `pause` or `reject` verdict
+- `references/resume-semantics.md` — returning to a saved identity (continuity_token, PATH semantics, hijack pattern)
 - `governance-fundamentals` skill — what the EISV numbers mean
 - `dialectic-reasoning` skill — how to participate in a structured review when paused
