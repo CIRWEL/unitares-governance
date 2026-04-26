@@ -53,6 +53,6 @@ Before you pick task-routing primitives, separate the asks. Which features are r
 
 ## Further reading
 
-- [UNITARES paper v6.8](https://github.com/CIRWEL/unitares-paper-v6) — *Information-Theoretic Governance of Heterogeneous Agent Fleets*. Concept DOI: [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
+- [UNITARES paper v6.9.1](https://github.com/CIRWEL/unitares-paper-v6) — *Information-Theoretic Governance of Heterogeneous Agent Fleets*. Concept DOI: [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)
 - [Governance MCP](https://github.com/CIRWEL/unitares) — runtime, MCP server, storage
 - [Host adapter](https://github.com/CIRWEL/unitares-host-adapter) — thin client bindings for agent hosts
