@@ -140,7 +140,13 @@ def _cli() -> int:
     print(f'UUID="{_esc(data.get("uuid", ""))}"')
     print(f'CSID="{_esc(data.get("client_session_id", ""))}"')
     print(f'TOK="{_esc(data.get("continuity_token", ""))}"')
-    print(f'SLOT="{_esc(data.get("slot", "default") or "default")}"')
+    # Empty fallback (S20.1a): the previous `"default"` literal collapsed
+    # every slotless cache onto a shared `session-default.json` target when
+    # the SLOT was used as a `--slot` arg downstream. Callers that need a
+    # non-empty SLOT (e.g. for diagnostic logging in checkin.py) handle the
+    # empty case explicitly; callers using SLOT to scope cache writes must
+    # skip the write when SLOT is empty — see hooks/post-edit S20.1a notes.
+    print(f'SLOT="{_esc(data.get("slot") or "")}"')
     return 0
 
 
