@@ -30,14 +30,17 @@ def test_post_edit_routes_through_checkin_py_with_plugin_hook_metadata(tmp_path)
     thread.start()
 
     # Pre-populate session cache and milestone so the decision helper fires.
-    # The hook reads these via scripts/session_cache.py in PWD/.unitares.
+    # Per S20.1a, the slot is derived from the stdin session_id (not the
+    # cache `slot` field), so the slotted cache filename and the stdin slot
+    # must match for the hook to find the cache.
+    slot = "edit-slot"
     unitares_dir = tmp_path / ".unitares"
     unitares_dir.mkdir()
-    (unitares_dir / "session.json").write_text(json.dumps({
+    (unitares_dir / f"session-{slot}.json").write_text(json.dumps({
         "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
         "client_session_id": "agent-edit-test",
         "continuity_token": "v1.edit-tok",
-        "slot": "edit-slot",
+        "slot": slot,
         "last_checkin_ts": int(time.time()) - 10_000,  # long past threshold
     }))
     (unitares_dir / "last-milestone.json").write_text(json.dumps({
@@ -47,9 +50,11 @@ def test_post_edit_routes_through_checkin_py_with_plugin_hook_metadata(tmp_path)
         "first_edit_ts": int(time.time()) - 10_000,
     }))
 
-    # Minimal PostToolUse hook payload on stdin
+    # Realistic PostToolUse hook payload on stdin (Claude Code passes
+    # session_id; S20.1a strictly requires it for slot-scoped writes).
     hook_payload = json.dumps({
         "hook_event_name": "PostToolUse",
+        "session_id": slot,
         "tool_name": "Edit",
         "tool_input": {"file_path": str(tmp_path / "c.py")},
     })

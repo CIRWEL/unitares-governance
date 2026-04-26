@@ -187,9 +187,32 @@ if [[ -z "${CONTINUITY_TOKEN}" && -z "${CLIENT_SESSION_ID}" ]]; then
   exit 0
 fi
 
-# Pull uuid + slot from the session-lookup eval above (slotted cache).
-# Fall back to "default" / "" if the eval didn't produce them.
-SLOT="${SLOT:-default}"
+# Slot derivation (S20.1a, 2026-04-26): SLOT is strictly the Claude Code
+# session_id from hook stdin. The eval at line 103 may have populated a
+# SLOT shell var from the cache's stored `slot` field; that value is
+# discarded here because a stale legacy flat cache can carry a slot string
+# from an unrelated prior session, and silently routing a write under that
+# stale slot would re-teach the cross-session collision pattern S20 closes.
+# The previous `${SLOT:-default}` literal-string fallback is removed for
+# the same reason — it collapsed every slotless hook invocation onto a
+# shared session-default.json target.
+#
+# Slotless invariant: when stdin lacks session_id, the entire auto-checkin
+# pipeline (checkin.py call, milestone reset, last_checkin_ts stamp) is
+# skipped. Firing checkin.py without being able to atomically stamp
+# last_checkin_ts would cause threshold flapping — every subsequent edit
+# past UNITARES_AUTO_CHECKIN_SECS would re-fire because the cache stamp
+# never advances. Full no-op + stderr breadcrumb is the legible degraded
+# state.
+SLOT_HELPER="${PLUGIN_ROOT}/scripts/_slot_from_stdin.py"
+SLOT=""
+if [[ -n "${HOOK_INPUT}" && -f "${SLOT_HELPER}" ]]; then
+  SLOT=$(printf '%s' "${HOOK_INPUT}" | python3 "${SLOT_HELPER}" 2>/dev/null || true)
+fi
+if [[ -z "${SLOT}" ]]; then
+  printf '[SLOTLESS_SKIP] post-edit: no session_id on stdin; auto-checkin pipeline not run\n' >&2
+  exit 0
+fi
 UUID_HINT="${UUID:-}"
 
 # NOTE: The previous inline curl supported UNITARES_HTTP_API_TOKEN as a Bearer
@@ -217,9 +240,15 @@ python3 "${SESSION_CACHE_HELPER}" \
   --workspace "${PWD}" >/dev/null 2>&1 || true
 
 NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
+# Slot-scoped milestone-timestamp write (S20.1a). Without --slot the helper
+# would target flat session.json, which the post-PR-19 session-start hook
+# deliberately ignores — the auto-checkin forcing function depends on this
+# stamp being readable from the slotted cache the next post-edit fire reads.
+# SLOT is guaranteed non-empty here (slotless path exits at line ~210).
 python3 "${SESSION_CACHE_HELPER}" \
   set session \
   --workspace "${PWD}" \
+  --slot "${SLOT}" \
   --merge \
   --stamp \
   --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true

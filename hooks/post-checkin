@@ -11,7 +11,20 @@
 # agent had to follow by hand — reliable enough to ship, not reliable enough
 # to keep relying on.
 #
-# Runs async — must never block or produce output on failure.
+# Slot derivation (S20.1a, 2026-04-26): the `last_checkin_ts` write must land
+# in the slot-scoped session cache, not the legacy flat session.json — flat
+# writes silently brick the auto-checkin forcing function (post-edit reads
+# the slotted cache via _session_lookup, which the post-PR-19 contract
+# scopes to slot-only). The slot is strictly the Claude Code session_id
+# from hook stdin; cache-stored `slot` fields are not consulted as a
+# fallback because a stale legacy flat cache may carry a slot value from a
+# prior unrelated session. When stdin lacks session_id (manual invocation,
+# non-Claude-Code context) the hook emits a [SLOTLESS_SKIP] breadcrumb on
+# stderr and is a full no-op — three ontologically distinct states (success,
+# crash, deliberate skip) are kept legible per axiom #14.
+#
+# Runs async — must never block or produce output on failure (stderr
+# breadcrumb is the documented exception; harness logs it without blocking).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -32,10 +45,35 @@ if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
   exit 0
 fi
 
-# Only act when we already have a governance session cached — this hook is
-# tool-scoped so we shouldn't see an empty cache in practice, but guarding
-# makes the hook safe to install in workspaces that never onboarded.
-SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+SLOT_HELPER="${PLUGIN_ROOT}/scripts/_slot_from_stdin.py"
+
+# Capture hook stdin (Claude Code passes tool event as JSON, including session_id).
+HOOK_INPUT=""
+if [[ ! -t 0 ]]; then
+  HOOK_INPUT=$(cat 2>/dev/null) || true
+fi
+
+# Derive slot strictly from stdin session_id via the shared helper.
+SLOT=""
+if [[ -n "${HOOK_INPUT}" && -f "${SLOT_HELPER}" ]]; then
+  SLOT=$(printf '%s' "${HOOK_INPUT}" | python3 "${SLOT_HELPER}" 2>/dev/null || true)
+fi
+
+# Slotless path: full no-op with a stderr breadcrumb. Pre-S20.1a, the hook
+# would have written to flat session.json here — the auto-checkin forcing
+# function depended on a stamp the next session-start would not read, so
+# the path was producing the wrong artifact. Better to be visibly inert
+# than invisibly wrong.
+if [[ -z "${SLOT}" ]]; then
+  printf '[SLOTLESS_SKIP] post-checkin: no session_id on stdin; milestone reset and last_checkin_ts not written\n' >&2
+  exit 0
+fi
+
+# Only act when we already have a governance session cached for this slot —
+# this hook is tool-scoped so we shouldn't see an empty cache in practice,
+# but guarding makes the hook safe to install in workspaces that never
+# onboarded.
+SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" --slot "${SLOT}" 2>/dev/null || echo "{}")
 if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
@@ -49,6 +87,7 @@ if [[ -n "${NOW_EPOCH}" ]]; then
   python3 "${SESSION_CACHE_HELPER}" \
     set session \
     --workspace "${PWD}" \
+    --slot "${SLOT}" \
     --merge \
     --stamp \
     --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true

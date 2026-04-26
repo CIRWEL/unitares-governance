@@ -138,6 +138,39 @@ def test_workspace_local_unslotted_still_reachable(tmp_path):
     assert json.loads(result.read_text())["uuid"] == "ws-local"
 
 
+def test_cli_emits_empty_slot_when_field_absent(tmp_path):
+    """S20.1a: the CLI's SLOT line must emit empty string when the cache
+    has no `slot` field — pre-S20.1a it emitted the literal `"default"`,
+    which collapsed every slotless caller onto a shared session-default.json
+    target downstream. Empty SLOT lets the caller decide (skip the slotted
+    write, or recover the slot from another source)."""
+    import subprocess
+    import sys as _sys
+
+    (tmp_path / ".unitares").mkdir()
+    # Cache without `slot` field — pre-S11 / legacy v1 shape
+    (tmp_path / ".unitares" / "session.json").write_text(json.dumps({
+        "uuid": "u",
+        "client_session_id": "c",
+        "continuity_token": "t",
+    }))
+
+    script = Path(__file__).parent.parent / "scripts" / "_session_lookup.py"
+    result = subprocess.run(
+        [_sys.executable, str(script), "--workspace", str(tmp_path)],
+        input="",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert 'SLOT=""' in result.stdout, (
+        f"expected empty SLOT for no-slot-field cache; got:\n{result.stdout}"
+    )
+    # Sanity: the other fields still propagate.
+    assert 'UUID="u"' in result.stdout
+    assert 'CSID="c"' in result.stdout
+
+
 def test_home_path_still_reachable_when_workspace_is_home(tmp_path, monkeypatch):
     """CLI / ad-hoc tools that genuinely want the HOME-level file can still
     get it by passing workspace=$HOME explicitly. This is the "be explicit
