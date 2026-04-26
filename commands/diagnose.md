@@ -10,14 +10,10 @@ Use the shared helper in this plugin repo:
 
 If continuity state exists:
 
-- treat `uuid` as a local identity anchor and lineage candidate
-- use `continuity_token` only for proof-owned UUID rebinds
+- treat `uuid` as a local identity anchor and lineage candidate, not ownership proof
+- treat `continuity_token` as short-lived (1h) anti-hijack proof, not a cross-process resume key
 
-Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when a matching current token is available.
-
-If no proof-owned UUID rebind is available, call `identity()` to inspect current binding. Use `/governance-start` to create a fresh process identity with `parent_agent_id=<cached uuid>` if this process should inherit prior work.
-
-Call `identity()` first when continuity or binding is unclear.
+Diagnosis flow: call `identity()` (no args) to inspect the current binding. If this process should inherit prior work, use `/governance-start` to create a fresh identity with `parent_agent_id=<cached uuid>`. PATH 0 UUID rebind via `identity(agent_uuid=..., continuity_token=...)` is an advanced edge path for still-live owners and is not the right tool for diagnosis.
 
 Then call `get_governance_metrics` for the current agent using the same continuity data.
 
@@ -25,13 +21,13 @@ Call `health_check()` only when system health, not agent state, may be part of t
 
 Display:
 
-- whether identity was proof-resumed, freshly created, or created with lineage
+- whether identity was freshly created, created with lineage, or PATH 0 rebound
 - `identity_status`
 - `bound_identity`
 - `session_resolution_source`
 - `continuity_token_supported`
-- `identity_assurance`
-- deprecation warnings
+- `ownership_proof_version`
+- `deprecations` (when present)
 - whether continuity looks strong or weak
 - E, I, S, V
 - coherence

@@ -32,7 +32,7 @@ If you are not using commands directly, the equivalent raw tool flow is:
 1. First run or fresh process: `onboard(force_new=true)`
 2. Fresh process continuing prior work: `onboard(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
 3. `process_agent_update()` after meaningful work
-4. Same live owner / proof-owned rebind only: `identity(agent_uuid=..., continuity_token=..., resume=true)`
+4. Advanced rebind to a still-live UUID (rare; not session-start): `identity(agent_uuid=..., continuity_token=...)` — PATH 0 anti-hijack gate; valid only when the token's `aid` matches the requested UUID
 5. `get_governance_metrics()` for read-only state checks
 6. `identity()` if continuity looks wrong
 7. `health_check()` if the system itself may be part of the problem
@@ -76,7 +76,9 @@ Do not treat every file edit as a governance event. High-signal check-ins are mo
 - `client_session_id`: in-session transport continuity metadata
 - `parent_agent_id`: lineage declaration for a fresh process continuing prior work
 - `session_resolution_source`: if this falls back to a weak source, rerun `/governance-start`
-- `identity_assurance`: strong is better than implicit
+- `continuity_token_supported`: whether the runtime issues continuity tokens at all
+- `ownership_proof_version`: which token-validation scheme the server is using
+- `deprecations`: warnings for legacy paths the server is sunsetting
 
 ## Commands
 

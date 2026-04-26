@@ -48,8 +48,9 @@ The intended workflow is:
 2. if continuing prior work, pass `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
 3. call `process_agent_update()` after meaningful work
 4. call `get_governance_metrics()` for read-only state
-5. use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds
-6. call `identity()` and `health_check()` when diagnosis is needed
+5. call `identity()` and `health_check()` when diagnosis is needed
+
+`identity(agent_uuid=..., continuity_token=...)` is an advanced PATH 0 rebind to a still-live UUID — not a session-start option. Use lineage declaration via `parent_agent_id` for normal "continuing prior work" flows.
 
 The principle is simple: prefer high-signal governance over high-frequency governance. Meaningful check-ins beat noisy check-ins.
 

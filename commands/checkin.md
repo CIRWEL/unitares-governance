@@ -16,9 +16,7 @@ If it exists:
 
 If current binding is unclear, call `identity()` first to inspect the active binding.
 
-If you must rebind to a cached UUID, include the matching `continuity_token`: `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`.
-
-If this is a fresh process and no ownership proof is available, use `/governance-start` to mint a fresh identity with `parent_agent_id=<cached uuid>` rather than bare UUID resume.
+If this is a fresh process and you have a cached UUID from prior work, use `/governance-start` to mint a fresh identity with `parent_agent_id=<cached uuid>`. Do not attempt UUID rebind from `/checkin`.
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 
@@ -42,7 +40,7 @@ Guidelines:
 After the call:
 
 - report the verdict
-- report identity-assurance or continuity warnings when they are surfaced
+- report continuity warnings or deprecation notices when surfaced (`session_resolution_source` falling back, `deprecations` field present)
 - report margin or edge warnings when present
 - report any guidance briefly
 - report the mirror question when present
