@@ -4,33 +4,32 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-04-25"
+last_verified: "2026-04-26"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
+  - unitares/src/tool_descriptions.json
 ---
 
 # Agent Lifecycle
 
 ## Starting a Session
 
-Call `onboard()` to register a fresh identity:
+Per identity.md v2 ontology, a fresh process-instance is a fresh agent. To continue prior work across processes, **declare lineage** — do not resume via token:
 
 ```
-onboard(name, model_type, force_new=true)        # create a fresh UUID
-onboard(continuity_token="<saved-token>")        # resume via signed token
+onboard(force_new=true, spawn_reason="explicit")            # genuinely new work, no lineage
+onboard(force_new=true, parent_agent_id="<prior-uuid>",     # continuing prior work in a fresh process
+        spawn_reason="new_session")
 ```
 
-**`force_new=true` is load-bearing for fresh mint.** Without it, a bare `onboard()` on a shared host (multiple same-family agents, Claude Desktop stdio, CI runners) may pin-resume a prior agent's UUID by IP:UA fingerprint alone — the server emits `identity_hijack_suspected` with `path='path2_ipua_pin'` when this happens. Pass `force_new=true` whenever you don't have a continuity_token for the workspace.
+`name=` is cosmetic — passing `name="Same-Agent"` does not re-bind to an existing agent.
 
-Returns:
-- **UUID** — your persistent identity; save this
-- **continuity_token** — signed proof of ownership; save this and pass it on subsequent calls
-- **client_session_id** — echo back in subsequent calls for session continuity within the same process
+You get back a **UUID** (your identity for this process), a **client_session_id** (within-process transport continuity), and a **continuity_token** (per-process anti-hijack proof, narrowly scoped — see `references/resume-semantics.md` before passing it forward to anything). The response also includes `session_resolution_source`, `continuity_token_supported`, `ownership_proof_version`, and a `deprecations` field when present.
 
-If the runtime supports a continuity token, prefer it over re-passing the UUID. For the full PATH semantics (PATH 0 / PATH 1 / PATH 2.8) and the canonical hijack pattern to avoid, see `references/resume-semantics.md`.
+The PATH semantics, the rare same-live-process rebind case, the S13 fresh-instance gate detail, the canonical hijack pattern, and why "save the token and pass it everywhere" is now an anti-pattern — all in `references/resume-semantics.md`. Read that before designing any client that handles tokens.
 
 ## Check-ins
 
@@ -50,7 +49,7 @@ When to check in:
 - When you feel uncertain or notice drift
 - **Not** after every single tool call — use judgment
 
-Returns a verdict plus current EISV metrics. Read the verdict and act on it.
+Returns a verdict plus current EISV metrics. The response also includes an `identity_assurance` block (`tier`, `score`, `session_source`, `trajectory_confidence`, `reason`) — read it after check-in to confirm strong continuity, especially if calling with `require_strong_identity=true`.
 
 ## Reading Verdicts
 
@@ -68,10 +67,11 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 
 Use in every session:
 
-- `onboard(continuity_token=...)` or `onboard(force_new=true)` — register or reconnect identity. A bare `onboard()` can silently pin-resume another agent; always pass a continuity_token or force_new.
+- `onboard(force_new=true, parent_agent_id=...)` — register a fresh process identity, optionally declaring lineage. Never call bare `onboard()`.
 - `process_agent_update()` — check in with work summary, complexity, confidence
 - `get_governance_metrics()` — read current EISV state
-- `identity()` — confirm who the runtime thinks you are
+- `identity()` — confirm who the runtime thinks you are within this process; rare same-live-process PATH 0 rebind via `(agent_uuid=..., continuity_token=..., resume=true)` (see `references/resume-semantics.md`)
+- `bind_session()` — explicit session rebind for a known `agent_uuid + client_session_id`; use only when bridging transports (e.g., REST hook → MCP session)
 - `health_check()` — operator-facing server health when behavior seems odd
 - `search_knowledge_graph()` — find existing knowledge before creating new entries
 - `leave_note()` — quick contribution to the knowledge graph
@@ -79,6 +79,6 @@ Use in every session:
 ## Going Deeper
 
 - `references/recovery.md` — what to do after a `pause` or `reject` verdict
-- `references/resume-semantics.md` — returning to a saved identity (continuity_token, PATH semantics, hijack pattern)
+- `references/resume-semantics.md` — PATH semantics, S13 gate detail, canonical hijack pattern, and why the "save the token, pass it everywhere" pattern is now an anti-pattern
 - `governance-fundamentals` skill — what the EISV numbers mean
 - `dialectic-reasoning` skill — how to participate in a structured review when paused
