@@ -188,8 +188,10 @@ if [[ -z "${CONTINUITY_TOKEN}" && -z "${CLIENT_SESSION_ID}" ]]; then
 fi
 
 # Pull uuid + slot from the session-lookup eval above (slotted cache).
-# Fall back to "default" / "" if the eval didn't produce them.
-SLOT="${SLOT:-default}"
+# SLOT comes from stdin's session_id (per S20 §3.5); if absent, the hook
+# leaves cache writes alone rather than falling back to a workspace-shared
+# "default" file that would defeat slot-scoping.
+SLOT="${SLOT:-}"
 UUID_HINT="${UUID:-}"
 
 # NOTE: The previous inline curl supported UNITARES_HTTP_API_TOKEN as a Bearer
@@ -212,16 +214,23 @@ python3 "${PLUGIN_ROOT}/scripts/checkin.py" \
 # locally; from the hook's perspective the attempt is fire-and-forget — we
 # always reset so the next edit starts a fresh accumulator window rather than
 # double-firing on counters that may already have been committed server-side.
+# Milestone is workspace-scoped (not slot-scoped) so reset is unconditional.
 python3 "${SESSION_CACHE_HELPER}" \
   reset-milestone \
   --workspace "${PWD}" >/dev/null 2>&1 || true
 
-NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
-python3 "${SESSION_CACHE_HELPER}" \
-  set session \
-  --workspace "${PWD}" \
-  --merge \
-  --stamp \
-  --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+# Session cache is slot-scoped. Skip the last_checkin_ts stamp when SLOT is
+# empty rather than fall back to flat session.json — S20 §3.5. The next hook
+# fire with a proper stdin slot re-stamps the right file.
+if [[ -n "${SLOT}" ]]; then
+  NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))")
+  python3 "${SESSION_CACHE_HELPER}" \
+    set session \
+    --workspace "${PWD}" \
+    --slot "${SLOT}" \
+    --merge \
+    --stamp \
+    --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+fi
 
 exit 0

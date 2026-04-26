@@ -140,3 +140,48 @@ def test_post_edit_reads_slotted_cache(tmp_path):
         f"post-edit did not fire auto_edit when only the slotted cache existed; "
         f"events: {events}"
     )
+
+
+def test_post_edit_writes_last_checkin_to_slotted_cache(tmp_path):
+    """S20 §3.5 write-path assertion: post-edit's last_checkin_ts stamp lands
+    in the slot-scoped file, never falling back to flat session.json.
+
+    Pre-S20.1a, the literal `SLOT="${SLOT:-default}"` fallback at post-edit:192
+    plus the slotless `set session` at post-edit:221 produced a write to
+    flat session.json (or a workspace-shared `session-default.json`). This
+    test pins the corrected slot-scoped write path."""
+    slot = "real-slot-write-3456"
+    initial_ts = int(time.time()) - 10_000
+    _seed_slotted_cache(tmp_path, slot, {
+        "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
+        "client_session_id": "agent-real-3456",
+        "continuity_token": "v1.real-tok",
+        "slot": slot,
+        "last_checkin_ts": initial_ts,
+    })
+    milestone = tmp_path / ".unitares" / "last-milestone.json"
+    milestone.write_text(json.dumps({
+        "edit_count": 10,
+        "files_touched": ["a.py"],
+        "last_edit_ts": int(time.time()),
+    }))
+    _run_hook_with_mock_server(
+        "post-edit", tmp_path, slot,
+        extra_stdin_fields={
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(tmp_path / "a.py")},
+        },
+    )
+
+    slotted = tmp_path / ".unitares" / _slot_filename(slot)
+    assert slotted.exists()
+    after = json.loads(slotted.read_text())
+    assert int(after.get("last_checkin_ts", 0)) > initial_ts, (
+        "slot-scoped last_checkin_ts not bumped — post-edit write may have "
+        "fallen back to flat session.json"
+    )
+    flat = tmp_path / ".unitares" / "session.json"
+    assert not flat.exists(), (
+        "post-edit wrote flat session.json — slot-scope partition broken"
+    )

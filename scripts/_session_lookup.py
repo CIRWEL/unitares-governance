@@ -126,6 +126,14 @@ def _cli() -> int:
 
     payload = _sys.stdin.read()
     data = load_session_for_hook(args.workspace, payload)
+    # SLOT shell var must reflect the *current process's* slot (from stdin),
+    # not the cached file's `slot` field. The two normally agree, but when
+    # the cache fell back to flat session.json (no slot field) or was written
+    # by a prior session, the cached field is wrong for *this* hook fire.
+    # Emitting empty when stdin has no slot lets callers skip slot-scoped
+    # writes safely instead of falling back to a workspace-shared sentinel
+    # like "default" — see S20 §3.5.
+    stdin_slot = _extract_slot(payload) or ""
 
     def _esc(value: str) -> str:
         # Escape for double-quoted bash string: backslash, double-quote, dollar, backtick
@@ -140,7 +148,7 @@ def _cli() -> int:
     print(f'UUID="{_esc(data.get("uuid", ""))}"')
     print(f'CSID="{_esc(data.get("client_session_id", ""))}"')
     print(f'TOK="{_esc(data.get("continuity_token", ""))}"')
-    print(f'SLOT="{_esc(data.get("slot", "default") or "default")}"')
+    print(f'SLOT="{_esc(stdin_slot)}"')
     return 0
 
 

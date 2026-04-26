@@ -32,26 +32,64 @@ if [[ -z "${SESSION_CACHE_HELPER}" ]]; then
   exit 0
 fi
 
+# Read hook input from stdin — Claude Code passes session_id here, and we
+# need it to slot-scope the cache write (S20 §3.5). Falling back to flat
+# session.json would silently defeat slot-scoping when this hook runs
+# alongside concurrent sessions in the same workspace.
+HOOK_INPUT=""
+if [[ ! -t 0 ]]; then
+  HOOK_INPUT=$(cat 2>/dev/null) || true
+fi
+
+# Resolve slot + session payload via shared lookup (mirrors post-edit's
+# pattern). The eval sets SLOT/UUID/CSID/TOK shell vars; SLOT is empty when
+# stdin has no session_id. The python block reads the slotted cache file
+# (or flat session.json as workspace-local fallback).
+SESSION_LOOKUP="${PLUGIN_ROOT}/scripts/_session_lookup.py"
+SLOT=""
+SESSION_PAYLOAD="{}"
+if [[ -f "${SESSION_LOOKUP}" && -n "${HOOK_INPUT}" ]]; then
+  eval "$(printf '%s' "${HOOK_INPUT}" | python3 "${SESSION_LOOKUP}" --workspace "${PWD}" 2>/dev/null || true)"
+  SESSION_PAYLOAD=$(printf '%s' "${HOOK_INPUT}" | python3 -c "
+import json, sys
+sys.path.insert(0, '${PLUGIN_ROOT}/scripts')
+from _session_lookup import load_session_for_hook
+data = load_session_for_hook('${PWD}', sys.stdin.read())
+print(json.dumps(data))
+" 2>/dev/null || echo "{}")
+else
+  # No stdin or no lookup helper — fall back to legacy unslotted read so
+  # the noop-without-session test still passes (hook exits cleanly when
+  # nothing has ever been cached).
+  SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
+fi
+
 # Only act when we already have a governance session cached — this hook is
 # tool-scoped so we shouldn't see an empty cache in practice, but guarding
 # makes the hook safe to install in workspaces that never onboarded.
-SESSION_PAYLOAD=$(python3 "${SESSION_CACHE_HELPER}" get session --workspace "${PWD}" 2>/dev/null || echo "{}")
 if [[ -z "${SESSION_PAYLOAD}" || "${SESSION_PAYLOAD}" == "{}" ]]; then
   exit 0
 fi
 
+# Milestone reset is workspace-scoped (not slot-scoped) — unconditional.
 python3 "${SESSION_CACHE_HELPER}" \
   reset-milestone \
   --workspace "${PWD}" >/dev/null 2>&1 || true
 
-NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))" 2>/dev/null || echo "")
-if [[ -n "${NOW_EPOCH}" ]]; then
-  python3 "${SESSION_CACHE_HELPER}" \
-    set session \
-    --workspace "${PWD}" \
-    --merge \
-    --stamp \
-    --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+# Session cache is slot-scoped. Skip the last_checkin_ts stamp when SLOT is
+# empty rather than fall back to flat session.json — S20 §3.5. The next hook
+# fire with a proper stdin slot re-stamps the right file.
+if [[ -n "${SLOT}" ]]; then
+  NOW_EPOCH=$(python3 -c "import time; print(int(time.time()))" 2>/dev/null || echo "")
+  if [[ -n "${NOW_EPOCH}" ]]; then
+    python3 "${SESSION_CACHE_HELPER}" \
+      set session \
+      --workspace "${PWD}" \
+      --slot "${SLOT}" \
+      --merge \
+      --stamp \
+      --json "{\"last_checkin_ts\": ${NOW_EPOCH}}" >/dev/null 2>&1 || true
+  fi
 fi
 
 exit 0
