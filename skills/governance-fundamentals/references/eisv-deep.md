@@ -20,6 +20,16 @@ Coherence measures how well your state vector holds together. It is calculated f
 - Do not chase a number — check in honestly and let it track naturally
 - Coherence reflects balance, not performance
 
+### Which V feeds coherence
+
+`get_governance_metrics(lite=false)` exposes V in three places: `ode_eisv.V`, `behavioral_eisv.V`, and `primary_eisv.V`. They can diverge significantly — do not assume a single V.
+
+- **`ode_eisv.V`** — thermodynamic integrator, heavily damped, typically lives in ~[−0.1, 0.1]. **Coherence is computed from this V** (`governance_state.py:229` calling `coherence_func(state.V, ...)`). That is why `coherence` often sits near 0.5 (tanh(0)=0 midpoint) regardless of what behavioral V is doing.
+- **`behavioral_eisv.V`** — observation-first EMA of actual agent behavior. Can swing to ±0.4. **Verdicts** use this channel once `behavioral_eisv.confidence ≥ 0.3`; before that, verdicts fall back to ODE.
+- **`primary_eisv`** — whichever channel is currently authoritative for verdicts. Check `primary_eisv_source` to see which.
+
+Practical implication: a large move in behavioral V will not move coherence in lockstep. If you are interpreting a flat coherence next to a swinging V, you are almost certainly comparing across channels. To actually move coherence you must move ODE V via sustained E-I imbalance, not via short-term behavioral swings. The `state_semantics` block in the metrics response is the runtime-authoritative version of this.
+
 ## Calibration — How Ground Truth Feeds Back
 
 The system tracks whether your stated confidence matches outcomes. Over time this builds a calibration curve.
