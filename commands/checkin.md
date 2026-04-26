@@ -1,3 +1,4 @@
+---
 description: "Manual UNITARES governance check-in after meaningful work"
 ---
 
@@ -9,8 +10,15 @@ Use the shared helper in this plugin repo:
 
 If it exists:
 
-- prefer `continuity_token`
-- otherwise use `client_session_id`
+- use `uuid` as the expected local identity anchor, not proof by itself
+- pass `continuity_token` when available for ownership proof
+- otherwise rely on the active session binding or `client_session_id`
+
+If current binding is unclear, call `identity()` first to inspect the active binding.
+
+If you must rebind to a cached UUID, include the matching `continuity_token`: `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`.
+
+If this is a fresh process and no ownership proof is available, use `/governance-start` to mint a fresh identity with `parent_agent_id=<cached uuid>` rather than bare UUID resume.
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 
@@ -21,7 +29,7 @@ Inputs:
 - `response_text`: concise summary of what was actually accomplished
 - `complexity`: estimate `0.0-1.0`
 - `confidence`: honest estimate `0.0-1.0`
-- include `continuity_token` when available, otherwise `client_session_id`
+- include `continuity_token` when available for ownership proof, otherwise rely on the active session binding or `client_session_id`
 - use `response_mode="mirror"` by default for Codex
 
 Guidelines:
@@ -34,6 +42,7 @@ Guidelines:
 After the call:
 
 - report the verdict
+- report identity-assurance or continuity warnings when they are surfaced
 - report margin or edge warnings when present
 - report any guidance briefly
 - report the mirror question when present

@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-04-17"
+last_verified: "2026-04-25"
 freshness_days: 14
 source_files:
   - skills/governance-lifecycle/SKILL.md
@@ -28,18 +28,21 @@ UNITARES evaluates agent state with the **EISV** model:
 - `S`: entropy / disorder / instability
 - `V`: void pressure / collapse tendency
 
-Agents typically start with `onboard()` and continue with
+Agents typically start with `onboard(force_new=true)` and continue with
 `process_agent_update()` as their main check-in loop.
 
 ## Session Continuity
 
-Use `onboard()` to register or reconnect identity. **Always pass either
-`continuity_token=<stored>` (to resume) or `force_new=true` (to mint
-fresh).** A bare `onboard()` on a shared host can pin-resume a prior
-agent's UUID by IP:UA fingerprint alone — see the governance-lifecycle
-skill for details. The returned `client_session_id` should be echoed
-back on later calls when continuity tokens are not available. This
-prevents attribution fragmentation across sessions.
+Use `onboard(force_new=true)` to register a fresh process identity. If
+the process is continuing prior work, declare that with
+`parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`.
+
+Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only
+when rebinding the same live owner to an existing UUID. The
+`continuity_token` is short-lived ownership proof for anti-hijack gates,
+not indefinite cross-process continuity. A bare `onboard()` or bare
+`identity(agent_uuid=..., resume=true)` can rely on weak evidence or an
+unsigned UUID claim; do not teach those as normal flow.
 
 Use `process_agent_update()` after meaningful work to record progress,
 complexity, and confidence, then read the returned governance verdict.

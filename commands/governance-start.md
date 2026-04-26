@@ -1,5 +1,5 @@
 ---
-description: "Start or resume a UNITARES session in Codex and refresh local continuity state"
+description: "Create, declare lineage, or proof-resume a UNITARES session in Codex"
 ---
 
 Start by checking for a local continuity cache in `.unitares/session.json` inside the current workspace.
@@ -11,19 +11,20 @@ Use the shared helper in this plugin repo:
 If the file exists:
 
 - read it
-- prefer `continuity_token` when present
-- otherwise use `client_session_id`
+- treat `uuid` as a lineage candidate, not ownership proof
+- keep `continuity_token` only as short-lived same-owner proof when it is current
 
-Then call `onboard()` against UNITARES:
+Then call UNITARES using the strongest honest mode:
 
-- include `continuity_token` when available
-- otherwise include `client_session_id` when available
-- if NEITHER is available, pass `force_new=true` — a bare `onboard()` can
-  pin-resume an unrelated prior agent's UUID by IP:UA fingerprint alone
-  (PATH 2 bleed; see `identity_hijack_suspected` events with
-  `path='path2_ipua_pin'`)
+- if this is a fresh process with no prior UUID, call `onboard(force_new=true)`
+- if this is a fresh process inheriting prior work, call `onboard(force_new=true, parent_agent_id=<cached uuid>, spawn_reason="new_session")`
+- if you are rebinding the same live owner and have a current matching token, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)`
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
+
+Do not use bare `identity(agent_uuid=<uuid>, resume=true)`. UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
+
+Do not use `onboard(continuity_token=...)` as cross-process resume except when deliberately testing the S1-a deprecation path.
 
 After a successful response:
 
@@ -42,7 +43,8 @@ After a successful response:
 
 When reporting back:
 
-- say whether the identity was created or resumed
+- say whether the identity was freshly created, proof-resumed, or created with lineage
+- if lineage was declared, name the parent UUID prefix
 - show the resolved display name or agent id
 - note whether continuity is strong or weak
 - mention the next useful command:

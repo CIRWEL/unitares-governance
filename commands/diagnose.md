@@ -10,8 +10,12 @@ Use the shared helper in this plugin repo:
 
 If continuity state exists:
 
-- prefer `continuity_token`
-- otherwise use `client_session_id`
+- treat `uuid` as a local identity anchor and lineage candidate
+- use `continuity_token` only for proof-owned UUID rebinds
+
+Do not verify by bare UUID resume. If you need to test ownership of a cached UUID, call `identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)` only when a matching current token is available.
+
+If no proof-owned UUID rebind is available, call `identity()` to inspect current binding. Use `/governance-start` to create a fresh process identity with `parent_agent_id=<cached uuid>` if this process should inherit prior work.
 
 Call `identity()` first when continuity or binding is unclear.
 
@@ -21,10 +25,13 @@ Call `health_check()` only when system health, not agent state, may be part of t
 
 Display:
 
-- whether identity was resumed or freshly created
+- whether identity was proof-resumed, freshly created, or created with lineage
 - `identity_status`
 - `bound_identity`
 - `session_resolution_source`
+- `continuity_token_supported`
+- `identity_assurance`
+- deprecation warnings
 - whether continuity looks strong or weak
 - E, I, S, V
 - coherence

@@ -29,12 +29,13 @@ This plugin currently optimizes for `explicit`.
 
 If you are not using commands directly, the equivalent raw tool flow is:
 
-1. `onboard(continuity_token=<saved>)` or `onboard(force_new=true)` — never bare `onboard()`; see identity pin-resume note in the governance-lifecycle skill
-2. keep `continuity_token` when supported, otherwise `client_session_id`
+1. First run or fresh process: `onboard(force_new=true)`
+2. Fresh process continuing prior work: `onboard(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
 3. `process_agent_update()` after meaningful work
-4. `get_governance_metrics()` for read-only state checks
-5. `identity()` if continuity looks wrong
-6. `health_check()` if the system itself may be part of the problem
+4. Same live owner / proof-owned rebind only: `identity(agent_uuid=..., continuity_token=..., resume=true)`
+5. `get_governance_metrics()` for read-only state checks
+6. `identity()` if continuity looks wrong
+7. `health_check()` if the system itself may be part of the problem
 
 ## Local Continuity Cache
 
@@ -61,7 +62,7 @@ Treat this as local runtime state. It should not be used as a source of truth ov
 
 Typical session:
 
-- start or resume with `/governance-start`
+- start, declare lineage, or proof-resume with `/governance-start`
 - do meaningful work
 - check in after a milestone, completed step, or decision point
 - diagnose only when needed
@@ -70,14 +71,16 @@ Do not treat every file edit as a governance event. High-signal check-ins are mo
 
 ## What to Watch
 
-- `continuity_token`: prefer this when available
-- `client_session_id`: fallback continuity token when strong resume is unavailable
-- `session_resolution_source`: if this falls back to a weak source, resume explicitly
+- `uuid`: identity anchor, not ownership proof
+- `continuity_token`: short-lived ownership proof for same-owner rebinding, not indefinite cross-process resume
+- `client_session_id`: in-session transport continuity metadata
+- `parent_agent_id`: lineage declaration for a fresh process continuing prior work
+- `session_resolution_source`: if this falls back to a weak source, rerun `/governance-start`
 - `identity_assurance`: strong is better than implicit
 
 ## Commands
 
-- `/governance-start` to onboard or resume and refresh local continuity state
+- `/governance-start` to create, declare lineage, or proof-resume and refresh local continuity state
 - `/checkin` for a governance update after meaningful work
 - `/diagnose` for identity, state, and operator diagnostics
 - `/dialectic` for structured review

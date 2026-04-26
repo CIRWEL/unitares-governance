@@ -44,11 +44,12 @@ That path is now the preferred default. Claude hook automation remains supported
 
 The intended workflow is:
 
-1. `onboard(continuity_token=<saved>)` to resume, or `onboard(force_new=true)` to mint fresh — a bare `onboard()` can silently pin-resume an unrelated agent on shared hosts
-2. preserve `client_session_id` and `continuity_token` when available
+1. `onboard(force_new=true)` to mint a fresh process identity
+2. if continuing prior work, pass `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
 3. call `process_agent_update()` after meaningful work
 4. call `get_governance_metrics()` for read-only state
-5. call `identity()` and `health_check()` when diagnosis is needed
+5. use `identity(agent_uuid=..., continuity_token=..., resume=true)` only for same-owner proof-owned rebinds
+6. call `identity()` and `health_check()` when diagnosis is needed
 
 The principle is simple: prefer high-signal governance over high-frequency governance. Meaningful check-ins beat noisy check-ins.
 
@@ -56,7 +57,7 @@ The principle is simple: prefer high-signal governance over high-frequency gover
 
 | Command | Description |
 |---------|-------------|
-| `/governance-start` | Start or resume a Codex/ChatGPT UNITARES session and refresh continuity state |
+| `/governance-start` | Create, declare lineage, or proof-resume a Codex/ChatGPT UNITARES session |
 | `/checkin` | Manual check-in after meaningful work |
 | `/diagnose` | Show current governance state plus identity/health diagnostics when needed |
 | `/dialectic` | Request a dialectic review |
