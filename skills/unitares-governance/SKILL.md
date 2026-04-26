@@ -37,15 +37,27 @@ Use `onboard(force_new=true)` to register a fresh process identity. If
 the process is continuing prior work, declare that with
 `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`.
 
-Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only
-when rebinding the same live owner to an existing UUID. The
-`continuity_token` is short-lived ownership proof for anti-hijack gates,
-not indefinite cross-process continuity. A bare `onboard()` or bare
-`identity(agent_uuid=..., resume=true)` can rely on weak evidence or an
-unsigned UUID claim; do not teach those as normal flow.
+For continuing prior work in a fresh process, the v2 posture is lineage
+declaration via `parent_agent_id` (above), not UUID rebind.
+`identity(agent_uuid=..., continuity_token=..., resume=true)` is real
+(PATH 0) and works as an ownership-proven rebind to a still-live UUID,
+but it is the explicit-rebind case, not the default. The
+`continuity_token` is short-lived (1h, rolling) anti-hijack proof, not
+indefinite cross-process continuity.
+
+S13 precision: the server's fresh-instance gate auto-promotes
+`force_new=true` and emits `[FRESH_INSTANCE]` only for **truly arg-less**
+`onboard()` calls. Any proof signal — including `onboard(name=...)` —
+bypasses the gate and can fall through to weak session/IP:UA pin
+behavior. Pass `force_new=true` explicitly whenever you mean to mint
+fresh. Bare `identity(agent_uuid=<uuid>)` without a matching token
+remains the canonical hijack pattern and is strict-mode rejected.
 
 Use `process_agent_update()` after meaningful work to record progress,
 complexity, and confidence, then read the returned governance verdict.
+The response includes an `identity_assurance` block (`tier`, `score`,
+`session_source`, `reason`) — check it after check-in to confirm strong
+continuity, especially when calling with `require_strong_identity=true`.
 
 ## Knowledge Layer
 
