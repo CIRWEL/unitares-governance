@@ -94,3 +94,71 @@ def test_bump_after_reset_restamps_first_edit(tmp_path: Path) -> None:
     assert state["edit_count"] == 1
     assert state["files_touched"] == ["/w/b.py"]
     assert state["first_edit_ts"] is not None
+
+
+def _run_raw(args: list[str], workspace: Path) -> subprocess.CompletedProcess:
+    cmd = [sys.executable, str(SCRIPT), *args, "--workspace", str(workspace)]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def test_set_session_refuses_stub_without_identity(tmp_path: Path) -> None:
+    """Stamp-only writes into a missing/identityless session cache must fail loudly,
+    not silently produce 88-byte stubs that brick the next hook's identity lookup.
+    Reproduces the failure path observed in production where post-edit's trailing
+    `--merge --stamp last_checkin_ts` write created caches with no UUID/token,
+    causing subsequent hooks to no-op."""
+    result = _run_raw(
+        [
+            "set", "session",
+            "--slot", "test-slot",
+            "--merge", "--stamp",
+            "--json", '{"last_checkin_ts": 1777281496}',
+        ],
+        tmp_path,
+    )
+    assert result.returncode == 1
+    assert "refusing to write session cache without any identity field" in result.stderr
+    assert not (tmp_path / ".unitares" / "session-test-slot.json").exists()
+
+
+def test_set_session_allows_partial_identity(tmp_path: Path) -> None:
+    """Legacy callers seed minimal payloads (e.g. continuity_token only).
+    The invariant only blocks zero-identity stubs, not partial-identity writes."""
+    result = _run_raw(
+        ["set", "session", "--slot", "test-slot",
+         "--json", '{"continuity_token": "ct-only"}'],
+        tmp_path,
+    )
+    assert result.returncode == 0
+
+
+def test_set_session_allows_stamp_when_identity_already_cached(tmp_path: Path) -> None:
+    """The stamp-only path must still work for the success case: cache has
+    identity from a prior onboard, post-edit merges last_checkin_ts on top."""
+    full = {
+        "uuid": "00000000-0000-0000-0000-000000000001",
+        "client_session_id": "agent-test",
+        "continuity_token": "",
+        "schema_version": 2,
+    }
+    seed = _run_raw(
+        ["set", "session", "--slot", "test-slot", "--json", json.dumps(full)],
+        tmp_path,
+    )
+    assert seed.returncode == 0
+
+    stamp = _run_raw(
+        [
+            "set", "session",
+            "--slot", "test-slot",
+            "--merge", "--stamp",
+            "--json", '{"last_checkin_ts": 1777281496}',
+        ],
+        tmp_path,
+    )
+    assert stamp.returncode == 0
+    cached = json.loads((tmp_path / ".unitares" / "session-test-slot.json").read_text())
+    assert cached["uuid"] == full["uuid"]
+    assert cached["client_session_id"] == full["client_session_id"]
+    assert cached["last_checkin_ts"] == 1777281496
+    assert "updated_at" in cached

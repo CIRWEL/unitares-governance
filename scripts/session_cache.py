@@ -143,6 +143,9 @@ def cmd_get(args: argparse.Namespace) -> int:
     return 0
 
 
+_SESSION_IDENTITY_FIELDS = ("uuid", "client_session_id", "continuity_token")
+
+
 def cmd_set(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
     path = _cache_path(args.kind, workspace, getattr(args, "slot", None))
@@ -151,6 +154,22 @@ def cmd_set(args: argparse.Namespace) -> int:
         existing = _read_json(path)
         existing.update(payload)
         payload = existing
+    if args.kind == "session" and not any(k in payload for k in _SESSION_IDENTITY_FIELDS):
+        # A session cache with NONE of [uuid, client_session_id, continuity_token]
+        # is a stub: subsequent hooks read it, find no addressable identity, and
+        # silently no-op. The auto-checkin pipeline downstream of post-edit
+        # produces exactly this when its --merge --stamp last_checkin_ts write
+        # lands in a workspace where onboard never ran. Refuse so the failure
+        # is visible (caller ignores via `|| true`) instead of silently
+        # bricking the next hook's identity lookup. Partial-identity writes
+        # (legacy continuity_token-only seeds, etc.) remain valid — the
+        # downstream readers only need any one identity hook to resolve.
+        print(
+            "session_cache.py: refusing to write session cache without any identity field "
+            f"(need at least one of {list(_SESSION_IDENTITY_FIELDS)})",
+            file=sys.stderr,
+        )
+        return 1
     if args.stamp:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_json(path, payload)
