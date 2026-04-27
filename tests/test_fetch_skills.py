@@ -661,3 +661,111 @@ def test_print_source_label_round_trips(
     # Second invocation hits the cache (within 300s default TTL).
     cached = subprocess.run(cmd, capture_output=True, text=True, check=True)
     assert "source=cache\n" in cached.stderr
+
+
+# ---------------------------------------------------------------------------
+# Defensive-cache tests — clock skew, replace failures, hostile nesting.
+# Each one pins a specific failure mode that the council review surfaced;
+# regression coverage so a future refactor can't silently re-introduce it.
+# ---------------------------------------------------------------------------
+
+
+def test_future_fetched_at_does_not_pin_cache_eternally(
+    mock_server, isolated_cache, fake_plugin_root
+):
+    """If `fetched_at` lands in the future (NFS clock skew, an operator
+    setting the clock back, a corrupt write), the unsigned `now -
+    fetched_at < ttl` check would otherwise return True forever. The
+    fix floors the delta at zero so future timestamps trigger a
+    refetch instead of pinning the cache as eternally fresh."""
+    cache_file = isolated_cache / "governance-fundamentals.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps(
+            {
+                "rendered": "---\nname: governance-fundamentals\n---\n\n# stale poison\n",
+                "registry_hash": "sha256:poison",
+                "registry_version": "stale",
+                "content_hash": "sha256:poison",
+                # 9999s in the future — without the floor, this would satisfy
+                # `delta < 300` and replay the poisoned content forever.
+                "fetched_at": int(time.time()) + 9999,
+            }
+        )
+    )
+    MockHandler.response_payload = _server_response("# fresh server content\n")
+
+    result = _run(plugin_root=fake_plugin_root, server_url=mock_server["url"])
+    assert result.returncode == 0
+    # The fresh-fetch breadcrumb fires — i.e. the script went to the server,
+    # it did not trust the future-dated cache.
+    assert "[FETCH_SKILLS_FRESH]" in result.stderr
+    assert "[FETCH_SKILLS_CACHE]" not in result.stderr
+    # Body is the server copy, not the poisoned cache.
+    assert "stale poison" not in result.stdout
+    assert "fresh server content" in result.stdout
+    # And exactly one HTTP call landed.
+    assert len(MockHandler.requests) == 1
+
+
+def test_write_cache_unlinks_tmp_on_replace_failure(
+    isolated_cache, monkeypatch
+):
+    """`os.replace` can fail (cross-device move, permission flip,
+    target-dir vanished). The fix wraps it so the mkstemp tmp file is
+    unlinked before bubbling — otherwise the cache dir grows hidden
+    `.governance-fundamentals-XXXX.tmp` files on every retry."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import importlib
+
+        mod = importlib.import_module("_fetch_skills")
+        importlib.reload(mod)  # pick up latest source if previously imported
+    finally:
+        sys.path.pop(0)
+
+    monkeypatch.setenv("UNITARES_SKILLS_CACHE_DIR", str(isolated_cache))
+
+    real_replace = os.replace
+
+    def boom(src, dst):  # noqa: ANN001
+        raise PermissionError("simulated replace failure")
+
+    monkeypatch.setattr(mod.os, "replace", boom)
+
+    with pytest.raises(PermissionError):
+        mod._write_cache("governance-fundamentals", {"rendered": "x"})
+
+    # No leftover tmp files. Without the fix, mkstemp left a
+    # `.governance-fundamentals-XXXX.tmp` in the cache dir.
+    monkeypatch.setattr(mod.os, "replace", real_replace)
+    if isolated_cache.exists():
+        leftovers = [p.name for p in isolated_cache.iterdir() if p.suffix == ".tmp"]
+        assert leftovers == [], f"orphaned tmp files: {leftovers}"
+
+
+def test_normalize_response_caps_recursion_depth(
+    mock_server, isolated_cache, fake_plugin_root
+):
+    """A hostile or malformed server could chain `content[0].text` →
+    JSON → `content[0].text` indefinitely. Without a depth cap, this
+    blows Python's recursion limit and propagates a RecursionError out
+    of the hook. Confirm the cap kicks in and the script falls back to
+    the bundled mirror cleanly (exit 0, OFFLINE_BUNDLED breadcrumb)."""
+    # Build a nested payload deeper than _NORMALIZE_MAX_DEPTH (=3).
+    # Each layer wraps the previous one in `{content: [{text: <json>}]}`.
+    inner = {"some_other_shape": True}
+    for _ in range(8):
+        inner = {"content": [{"text": json.dumps(inner)}]}
+    MockHandler.response_payload = inner
+
+    result = _run(plugin_root=fake_plugin_root, server_url=mock_server["url"])
+    # Bundled mirror has the fake content from the fixture — the script
+    # must fall through to it cleanly rather than crash.
+    assert result.returncode == 0
+    assert "[FETCH_SKILLS_OFFLINE_BUNDLED]" in result.stderr
+    assert "Bundled mirror content" in result.stdout
+    # And the parse-error breadcrumb names the depth cap explicitly so an
+    # operator reading the log can tell this apart from a JSON-parse miss.
+    assert "PARSE_ERROR" in result.stderr
+    assert "normalize depth" in result.stderr

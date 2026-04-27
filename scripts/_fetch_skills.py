@@ -108,10 +108,26 @@ def _write_cache(name: str, payload: dict[str, Any]) -> None:
         os.fchmod(fd, 0o600)
     finally:
         os.close(fd)
-    os.replace(tmp_name, str(path))
+    try:
+        os.replace(tmp_name, str(path))
+    except Exception:
+        # Cross-device replace, permission flip, or any other os.replace
+        # failure leaves the tmp file behind. The mkstemp path is hidden
+        # (dot-prefixed) but accumulates on retries — clean up before
+        # bubbling so the cache dir doesn't grow leaks.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
-def _normalize_response(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
+_NORMALIZE_MAX_DEPTH = 3
+
+
+def _normalize_response(
+    raw: dict[str, Any], _depth: int = 0
+) -> Optional[dict[str, Any]]:
     """Unwrap REST and native-MCP response shapes to the inner payload.
 
     REST `/v1/tools/call` returns ``{name, result: {success, skills, ...}, success}``;
@@ -119,7 +135,14 @@ def _normalize_response(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
     "MCP response shapes" memory). Some endpoints return data directly.
     Try the most-common shapes in order; first one that yields ``{skills:
     [...]}`` wins.
+
+    Depth-capped: a hostile or malformed server could chain ``content[0].text``
+    → JSON → ``content[0].text`` indefinitely and exhaust Python's recursion
+    limit. Real responses unwrap in 0 or 1 levels; cap at 3.
     """
+    if _depth > _NORMALIZE_MAX_DEPTH:
+        _crumb("PARSE_ERROR", f"normalize depth > {_NORMALIZE_MAX_DEPTH}")
+        return None
     if "skills" in raw and isinstance(raw["skills"], list):
         return raw
     if isinstance(raw.get("result"), dict) and isinstance(
@@ -134,7 +157,11 @@ def _normalize_response(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
                 inner = json.loads(first["text"])
             except Exception:
                 return None
-            return _normalize_response(inner) if isinstance(inner, dict) else None
+            return (
+                _normalize_response(inner, _depth + 1)
+                if isinstance(inner, dict)
+                else None
+            )
     return None
 
 
@@ -300,11 +327,15 @@ def fetch_skill_content(
     cached = _read_cache(name)
 
     # 1. Cache-hit path: TTL-fresh content replays without HTTP.
+    # Floor delta at 0 so a future-dated `fetched_at` (NFS clock skew, an
+    # operator dragging the system clock back, or a bad write) cannot
+    # produce a negative delta that satisfies the unsigned `< ttl` check
+    # and pins the cache as eternally fresh.
     if (
         not force_refresh
         and cached
         and isinstance(cached.get("fetched_at"), int)
-        and (now - cached["fetched_at"]) < cache_ttl_secs
+        and 0 <= (now - cached["fetched_at"]) < cache_ttl_secs
         and isinstance(cached.get("rendered"), str)
     ):
         _crumb("CACHE", f"age={now - cached['fetched_at']}s ttl={cache_ttl_secs}s")
