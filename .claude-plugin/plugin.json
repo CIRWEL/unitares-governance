@@ -7,6 +7,6 @@
   },
   "homepage": "https://github.com/CIRWEL/unitares-governance-plugin",
   "repository": "https://github.com/CIRWEL/unitares-governance-plugin",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["governance", "eisv", "thermodynamic", "multi-agent", "dialectic", "coherence"]
 }
