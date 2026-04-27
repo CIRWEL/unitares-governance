@@ -84,7 +84,7 @@ def test_last_checkin_ts_lands_in_slotted_cache(tmp_path: Path) -> None:
     slotted_path = _seed_slotted(tmp_path, slot, {
         "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
         "client_session_id": "agent-write-1",
-        "continuity_token": "v1.write-tok",
+        "continuity_token": "",  # S20.1b: v2 cache holds empty token (lineage hint, not credential)
         "slot": slot,
         "last_checkin_ts": int(time.time()) - 10_000,  # past threshold
     })
@@ -134,7 +134,7 @@ def test_slotless_stdin_is_full_no_op_with_breadcrumb(tmp_path: Path) -> None:
     _seed_slotted(tmp_path, real_slot, {
         "uuid": "86ae619f-87e0-4040-8f29-eacece0c7904",
         "client_session_id": "agent-real",
-        "continuity_token": "v1.real-tok",
+        "continuity_token": "",  # S20.1b: v2 cache holds empty token
         "slot": real_slot,
         "last_checkin_ts": int(time.time()) - 10_000,
     })
@@ -142,7 +142,7 @@ def test_slotless_stdin_is_full_no_op_with_breadcrumb(tmp_path: Path) -> None:
     flat_path.write_text(json.dumps({
         "uuid": "leg-uuid",
         "client_session_id": "agent-leg",
-        "continuity_token": "v1.leg",
+        "continuity_token": "v1.leg",  # legacy on-disk shape — written directly, not via helper
         # No `slot` field — pre-S11 cache shape
         "last_checkin_ts": int(time.time()) - 10_000,
     }))
@@ -198,7 +198,7 @@ def test_stale_cache_slot_field_does_not_leak_into_write_target(tmp_path: Path) 
     flat_path.write_text(json.dumps({
         "uuid": "stale-uuid",
         "client_session_id": "agent-stale",
-        "continuity_token": "v1.stale-tok",
+        "continuity_token": "v1.stale-tok",  # legacy on-disk shape — written directly, not via helper
         "slot": stale_slot,  # the leak vector
         "last_checkin_ts": int(time.time()) - 10_000,
     }))
@@ -245,14 +245,14 @@ def test_stdin_session_id_overrides_stale_cache_slot(tmp_path: Path) -> None:
     _seed_slotted(tmp_path, cache_slot, {
         "uuid": "stale-uuid",
         "client_session_id": "agent-stale",
-        "continuity_token": "v1.stale",
+        "continuity_token": "",  # S20.1b: v2 cache shape; merge target stays clean
         "slot": cache_slot,
         "last_checkin_ts": int(time.time()) - 10_000,
     })
     live_path = _seed_slotted(tmp_path, live_slot, {
         "uuid": "live-uuid",
         "client_session_id": "agent-live",
-        "continuity_token": "v1.live",
+        "continuity_token": "",  # S20.1b: v2 cache shape; merge target stays clean
         "slot": live_slot,
         "last_checkin_ts": int(time.time()) - 10_000,
     })

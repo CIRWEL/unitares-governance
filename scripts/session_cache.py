@@ -148,28 +148,76 @@ _SESSION_IDENTITY_FIELDS = ("uuid", "client_session_id", "continuity_token")
 
 def cmd_set(args: argparse.Namespace) -> int:
     workspace = _workspace_path(args.workspace)
-    path = _cache_path(args.kind, workspace, getattr(args, "slot", None))
+    slot = getattr(args, "slot", None)
+    allow_shared = bool(getattr(args, "allow_shared", False))
+
+    if args.kind == "session" and not slot and not allow_shared:
+        # Slotless session writes produce flat `session.json`, the workspace-
+        # shared "current owner" file every same-UID process can read. Hook
+        # layer (PR #19) refuses to read it; helper now refuses to write it.
+        # Convention-level: a determined caller can still write JSON directly
+        # to the path (axiom #14). The earned defense lives in S1-A′ + S19.
+        print(
+            "session_cache.py: refusing slotless session write — pass --slot <id> "
+            "(substrate-earned single-tenant: --allow-shared; convention-level — "
+            "direct file writes still bypass)",
+            file=sys.stderr,
+        )
+        return 2
+
+    path = _cache_path(args.kind, workspace, slot)
     payload = _load_payload(args)
     if args.merge:
         existing = _read_json(path)
+        if args.kind == "session":
+            # Auto-migrate v1 legacy tokens during merge: a pre-existing
+            # slot file from before S11/S20 may carry a real continuity_token
+            # at rest. Without this strip, the token-rejection check below
+            # would fire on every merge against such a cache and brick
+            # callers like the post-edit auto-checkin stamp (errors swallowed
+            # via `|| true`). The strip is one-way: we never re-introduce a
+            # legacy token; we only let new writes (whose own continuity_token
+            # is checked below) succeed. Stderr breadcrumb keeps the
+            # migration legible per axiom #14.
+            stale_token = existing.get("continuity_token")
+            if isinstance(stale_token, str) and stale_token.strip():
+                existing.pop("continuity_token", None)
+                print(
+                    f"session_cache.py: [V1_LEGACY_STRIP] dropped pre-existing "
+                    f"continuity_token from {path} during merge",
+                    file=sys.stderr,
+                )
         existing.update(payload)
         payload = existing
-    if args.kind == "session" and not any(k in payload for k in _SESSION_IDENTITY_FIELDS):
-        # A session cache with NONE of [uuid, client_session_id, continuity_token]
-        # is a stub: subsequent hooks read it, find no addressable identity, and
-        # silently no-op. The auto-checkin pipeline downstream of post-edit
-        # produces exactly this when its --merge --stamp last_checkin_ts write
-        # lands in a workspace where onboard never ran. Refuse so the failure
-        # is visible (caller ignores via `|| true`) instead of silently
-        # bricking the next hook's identity lookup. Partial-identity writes
-        # (legacy continuity_token-only seeds, etc.) remain valid — the
-        # downstream readers only need any one identity hook to resolve.
-        print(
-            "session_cache.py: refusing to write session cache without any identity field "
-            f"(need at least one of {list(_SESSION_IDENTITY_FIELDS)})",
-            file=sys.stderr,
-        )
-        return 1
+
+    if args.kind == "session":
+        token = payload.get("continuity_token")
+        # Literal empty string is the v2 hook erasure path (passes). Any
+        # non-empty string is rejected — including whitespace-only values,
+        # since `bool(" ")` is True in Python and downstream readers that
+        # test `if continuity_token:` would treat it as a credential.
+        if isinstance(token, str) and token:
+            print(
+                "session_cache.py: refusing session payload with non-empty "
+                "continuity_token — v2 ontology stores lineage, not resume "
+                "credentials (write empty string to erase, or omit the field; "
+                "to recover a legacy slot file, run: clear session --slot <id>)",
+                file=sys.stderr,
+            )
+            return 2
+        if not any(k in payload for k in _SESSION_IDENTITY_FIELDS):
+            # A session cache with NONE of [uuid, client_session_id, continuity_token]
+            # is a stub: subsequent hooks read it, find no addressable identity,
+            # and silently no-op. Refuse so the failure is visible (caller
+            # ignores via `|| true`) instead of silently bricking the next
+            # hook's identity lookup.
+            print(
+                "session_cache.py: refusing to write session cache without any identity field "
+                f"(need at least one of {list(_SESSION_IDENTITY_FIELDS)})",
+                file=sys.stderr,
+            )
+            return 1
+
     if args.stamp:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_json(path, payload)
@@ -185,6 +233,68 @@ def cmd_clear(args: argparse.Namespace) -> int:
         path.unlink()
     except FileNotFoundError:
         pass
+    return 0
+
+
+def _parse_session_filename(name: str) -> str | None:
+    """Recover the slot suffix from a session-*.json filename.
+
+    Returns the slot string (the segment between ``session-`` and ``.json``),
+    or ``None`` for the flat ``session.json`` (no slot) and for any name that
+    does not match the pattern. Slot strings here are pre-sanitized (the
+    writer ran them through ``_slot_suffix``) so callers receive the safe
+    form already on disk.
+    """
+    if not name.startswith("session-") or not name.endswith(".json"):
+        return None
+    return name[len("session-") : -len(".json")] or None
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List slot inventory for the session cache, newest first.
+
+    Emits a JSON array of ``{slot, parent_agent_id, prior_client_session_id,
+    updated_at, path}`` objects. Field names are deliberately the v2
+    declared-lineage parameters of ``onboard()`` so consumers naturally
+    flow into ``onboard(force_new=true, parent_agent_id=entry["parent_agent_id"])``
+    — declared lineage, not resume. The scan-newest fallback (S20 §2b) is
+    a *lineage candidate surface*, never a resume credential.
+
+    Entries with neither identity field are filtered: a null-identity row
+    has no actionable lineage hint and would silently mis-rank the
+    scan-newest pick if it sorted to the top by ``updated_at``. Malformed
+    JSON is skipped silently — this is a discovery surface, not a
+    validator.
+    """
+    workspace = _workspace_path(args.workspace)
+    cache_dir = workspace / CACHE_DIR
+    entries: list[dict[str, Any]] = []
+    if cache_dir.is_dir():
+        for path in cache_dir.iterdir():
+            if not path.is_file():
+                continue
+            slot = _parse_session_filename(path.name)
+            # path.name == "session.json" → slot is None (the flat fallback).
+            # Surface legacy/--allow-shared files alongside slotted ones so
+            # operators can see them; consumers decide whether to use them.
+            if path.name != "session.json" and slot is None:
+                continue
+            data = _read_json(path)
+            if not data:
+                continue
+            uuid = data.get("uuid")
+            sid = data.get("client_session_id")
+            if not uuid and not sid:
+                continue
+            entries.append({
+                "slot": slot,
+                "parent_agent_id": uuid,
+                "prior_client_session_id": sid,
+                "updated_at": data.get("updated_at"),
+                "path": str(path),
+            })
+    entries.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
+    print(json.dumps(entries))
     return 0
 
 
@@ -275,6 +385,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_set.add_argument("kind", choices=sorted(CACHE_FILES))
     p_set.add_argument("--workspace")
     p_set.add_argument("--slot", help="Claude Code session_id for slotted cache")
+    p_set.add_argument(
+        "--allow-shared",
+        action="store_true",
+        help=(
+            "Permit slotless session writes for substrate-earned single-tenant "
+            "deployments (e.g., Lumen on dedicated Pi). Operator-asserted — no "
+            "runtime substrate-claim attestation here; the principled gate "
+            "lives with S19 substrate attestation (see "
+            "docs/ontology/s20-cache-scope-narrowing.md §6)."
+        ),
+    )
     p_set.add_argument("--json")
     p_set.add_argument("--merge", action="store_true")
     p_set.add_argument("--stamp", action="store_true")
@@ -286,6 +407,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_clear.add_argument("--workspace")
     p_clear.add_argument("--slot", help="Claude Code session_id for slotted cache")
     p_clear.set_defaults(func=cmd_clear)
+
+    p_list = sub.add_parser(
+        "list",
+        help="List session slot inventory (newest first) as JSON",
+    )
+    p_list.add_argument("--workspace")
+    p_list.set_defaults(func=cmd_list)
 
     p_bump = sub.add_parser(
         "bump-edit",

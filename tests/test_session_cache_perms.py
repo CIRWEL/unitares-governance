@@ -1,9 +1,11 @@
 """session_cache.py writes session and milestone files mode 0600.
 
-The session cache carries continuity tokens. A world-readable cache lets
-any same-UID process on the host read another agent's token and
-impersonate it against the governance API. Guards against regressing
-_write_json back to Path.write_text (which inherits umask 022 → 0644).
+The session cache historically carried continuity tokens. Even after
+S20.1b narrows v2 caches to lineage hints (no resume credential), a
+world-readable cache still leaks identity hints, slot strings, and
+last_checkin_ts metadata to any same-UID process on the host. Guards
+against regressing _write_json back to Path.write_text (which inherits
+umask 022 → 0644).
 """
 
 from __future__ import annotations
@@ -27,11 +29,15 @@ def _run(args: list[str], workspace: Path, stdin: str | None = None) -> str:
 
 
 def test_set_session_writes_mode_0600(tmp_path: Path) -> None:
+    # S20.1b: slotted v2 write is the supported path; --allow-shared kept
+    # available for substrate-earned single-tenant deployments. Either
+    # writer must emit 0600.
     _run(
-        ["set", "session", "--json", '{"continuity_token": "secret-abc"}'],
+        ["set", "session", "--slot", "perm-test",
+         "--json", '{"uuid": "00000000-0000-0000-0000-00000000abcd"}'],
         tmp_path,
     )
-    cache_file = tmp_path / ".unitares" / "session.json"
+    cache_file = tmp_path / ".unitares" / "session-perm-test.json"
     assert cache_file.exists()
     assert _stat.S_IMODE(os.stat(cache_file).st_mode) == 0o600
 
@@ -48,16 +54,18 @@ def test_bump_edit_milestone_writes_mode_0600(tmp_path: Path) -> None:
 def test_set_session_overwrite_tightens_loose_mode(tmp_path: Path) -> None:
     """If a pre-existing cache was written 0644 by an older version,
     the next write must tighten it to 0600 — old loose permissions
-    must not leak through."""
+    must not leak through. (S20.1b: tested on the slotted path; the
+    flat-file writer is rejected by default.)"""
     cache_dir = tmp_path / ".unitares"
     cache_dir.mkdir()
-    legacy = cache_dir / "session.json"
-    legacy.write_text(json.dumps({"continuity_token": "old-secret"}))
+    legacy = cache_dir / "session-perm-test.json"
+    legacy.write_text(json.dumps({"uuid": "00000000-0000-0000-0000-00000000beef"}))
     os.chmod(legacy, 0o644)
     assert _stat.S_IMODE(os.stat(legacy).st_mode) == 0o644
 
     _run(
-        ["set", "session", "--json", '{"continuity_token": "new-secret"}'],
+        ["set", "session", "--slot", "perm-test",
+         "--json", '{"uuid": "00000000-0000-0000-0000-00000000abcd"}'],
         tmp_path,
     )
     assert _stat.S_IMODE(os.stat(legacy).st_mode) == 0o600

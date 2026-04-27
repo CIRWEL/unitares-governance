@@ -27,9 +27,12 @@ POST_CHECKIN = ROOT / "hooks" / "post-checkin"
 
 
 def _seed_session(workspace: Path, slot: str | None = None, **extra) -> None:
+    # S20.1b: v2-canonical identity is uuid + client_session_id; the legacy
+    # `continuity_token` seed is no longer valid via the helper. Tests now
+    # seed the cache the way a v2 onboard hook would.
     payload = {
+        "uuid": "00000000-0000-0000-0000-000000000abc",
         "client_session_id": "sid-xyz",
-        "continuity_token": "ct-abc",
         **extra,
     }
     cmd = [
