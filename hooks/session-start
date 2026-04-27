@@ -63,13 +63,74 @@ print(json.dumps(sys.argv[1])[1:-1])
 }
 
 # ---------------------------------------------------------------------------
-# Load a short reference snippet (available regardless of server status)
+# Load a short reference snippet via S15-c fetch helper.
+#
+# The helper tries server fetch (cache → /v1/tools/call skills tool) and
+# falls back to the bundled mirror at
+# ${PLUGIN_ROOT}/skills/governance-fundamentals/SKILL.md when MCP is
+# unreachable. Stderr [FETCH_SKILLS_*] breadcrumbs distinguish fresh
+# vs. cached vs. bundled-fallback so the degraded state is legible
+# (axiom #14). On total failure (helper missing + no bundled mirror)
+# SessionStart still ships — just without the Fundamentals excerpt
+# block, same as pre-S15-c when the file was simply missing.
 # ---------------------------------------------------------------------------
 SKILL_CONTENT=""
-SKILL_FILE="${PLUGIN_ROOT}/skills/governance-fundamentals/SKILL.md"
-if [[ -f "${SKILL_FILE}" ]]; then
-  SKILL_CONTENT="$(sed -n '1,80p' "${SKILL_FILE}")"
+SKILL_SOURCE=""
+FETCH_SKILLS_HELPER="${PLUGIN_ROOT}/scripts/_fetch_skills.py"
+SKILL_FETCHED=""
+SKILL_STDERR_FILE=""
+if [[ -f "${FETCH_SKILLS_HELPER}" ]]; then
+  SKILL_STDERR_FILE=$(mktemp -t unitares-fetch-skills.XXXXXX 2>/dev/null || true)
+  if [[ -n "${SKILL_STDERR_FILE}" ]]; then
+    SKILL_FETCHED=$(python3 "${FETCH_SKILLS_HELPER}" \
+      --name governance-fundamentals \
+      --plugin-root "${PLUGIN_ROOT}" \
+      --server-url "${SERVER_URL}" \
+      --print-source 2>"${SKILL_STDERR_FILE}" || true)
+    # Pull the `source=<label>` line so the agent-facing excerpt header
+    # can carry an honesty marker on the offline path. Operators see the
+    # full breadcrumb stream in HEALTH_LOG when they need it.
+    SKILL_SOURCE=$(grep -E '^source=' "${SKILL_STDERR_FILE}" 2>/dev/null | tail -1 | sed -e 's/^source=//' || true)
+    if [[ -n "${HEALTH_LOG:-}" ]]; then
+      cat "${SKILL_STDERR_FILE}" >>"${HEALTH_LOG}" 2>/dev/null || true
+    fi
+    rm -f "${SKILL_STDERR_FILE}"
+  else
+    SKILL_FETCHED=$(python3 "${FETCH_SKILLS_HELPER}" \
+      --name governance-fundamentals \
+      --plugin-root "${PLUGIN_ROOT}" \
+      --server-url "${SERVER_URL}" 2>/dev/null || true)
+  fi
 fi
+if [[ -n "${SKILL_FETCHED}" ]]; then
+  SKILL_CONTENT="$(printf '%s\n' "${SKILL_FETCHED}" | sed -n '1,80p')"
+else
+  # Helper missing or returned empty — last-ditch direct read of the
+  # bundled mirror so SessionStart never ships an empty excerpt when a
+  # local SKILL.md is on disk.
+  SKILL_FILE="${PLUGIN_ROOT}/skills/governance-fundamentals/SKILL.md"
+  if [[ -f "${SKILL_FILE}" ]]; then
+    SKILL_CONTENT="$(sed -n '1,80p' "${SKILL_FILE}")"
+    SKILL_SOURCE="${SKILL_SOURCE:-bundled_direct}"
+  fi
+fi
+
+# Agent-facing honesty marker: when content came from an offline path,
+# the excerpt header carries a "(...)" suffix so the agent can tell it
+# is reading potentially-stale-vs-current-tool-descriptions content.
+# The §6 authority hierarchy says skills must not contradict tool
+# descriptions; in offline-fallback the contradiction risk is real and
+# bounded by plugin install age. Surfacing the marker is the honesty
+# acknowledgment in the agent's view, not just operator stderr.
+SKILL_SOURCE_SUFFIX=""
+case "${SKILL_SOURCE}" in
+  offline_bundled|bundled_direct)
+    SKILL_SOURCE_SUFFIX=" (bundled mirror — server unreachable, may be stale)" ;;
+  offline_cache)
+    SKILL_SOURCE_SUFFIX=" (cached — server unreachable)" ;;
+  fresh_stale)
+    SKILL_SOURCE_SUFFIX=" (server flagged stale)" ;;
+esac
 
 if [[ -n "${SKILL_CONTENT}" && -n "${FRESHNESS_WARNING_HELPER}" ]]; then
   FRESHNESS_WARNING=$(python3 "${FRESHNESS_WARNING_HELPER}" "${SKILL_CONTENT}" 2>/dev/null || true)
@@ -259,7 +320,7 @@ ${WORKSPACE_LINEAGE_HINT}"
   if [[ "${COMPACT_MODE}" != "1" && -n "${SKILL_CONTENT}" ]]; then
     CONTEXT="${CONTEXT}
 
---- Governance Fundamentals (excerpt) ---
+--- Governance Fundamentals (excerpt)${SKILL_SOURCE_SUFFIX} ---
 ${SKILL_CONTENT}"
   fi
 fi

@@ -118,16 +118,64 @@ def _serve_and_run(tmp_path, **run_kwargs):
 
 
 class TestSessionStartMakesNoToolCalls:
-    """The hook's single most important invariant: no governance mutations on start."""
+    """The hook's load-bearing invariant: no governance state-mutation on start.
 
-    def test_online_path_emits_zero_tool_calls(self, tmp_path):
+    S15-c (2026-04-27) added a single read-only, identity-blind introspection
+    call to the `skills` tool to fetch canonical skill content from the server
+    (with offline fallback to the bundled mirror). `skills` is in the
+    rate_limit_exempt read-only set on the server side and does not consume
+    or mutate identity per §4.5 of the s15-server-side-skills.md design.
+    The Identity Honesty Part C invariant (no auto-onboard, no auto-resume)
+    is unchanged."""
+
+    # Anything in this set is considered identity-mutating or state-changing
+    # and must NEVER be called from SessionStart. `skills` is deliberately
+    # excluded — it is the S15-c introspection fetch.
+    FORBIDDEN_TOOLS = {
+        "onboard",
+        "identity",
+        "bind_session",
+        "process_agent_update",
+        "self_recovery",
+        "knowledge",
+        "leave_note",
+        "outcome_event",
+        "calibration",
+        "agent",
+        "archive_orphan_agents",
+        "config",
+        "dialectic",
+        "observe",
+    }
+
+    def _assert_no_state_mutations(self, calls):
+        tool_calls = [c.get("name") for c in calls if isinstance(c, dict)]
+        forbidden = [t for t in tool_calls if t in self.FORBIDDEN_TOOLS]
+        assert not forbidden, (
+            f"SessionStart must not invoke identity-mutating governance tools; "
+            f"saw forbidden: {forbidden} (full call list: {tool_calls})"
+        )
+
+    def test_online_path_makes_no_state_mutations(self, tmp_path):
+        _, calls = _serve_and_run(tmp_path)
+        self._assert_no_state_mutations(calls)
+
+    def test_online_path_only_fetches_skills_introspection(self, tmp_path):
+        """Positive bound: the only tool call SessionStart should make is
+        the S15-c skills fetch. Surface any new call so a future hook
+        addition is reviewed against the no-state-mutation invariant."""
         _, calls = _serve_and_run(tmp_path)
         tool_calls = [c.get("name") for c in calls if isinstance(c, dict)]
-        assert tool_calls == [], (
-            f"SessionStart must not invoke any governance tools; saw: {tool_calls}"
+        unexpected = [t for t in tool_calls if t != "skills"]
+        assert not unexpected, (
+            f"SessionStart made unexpected tool calls: {unexpected}. "
+            f"Only 'skills' (S15-c introspection) is allowed; any other "
+            f"addition needs explicit review."
         )
 
     def test_offline_path_emits_zero_tool_calls(self, tmp_path):
+        """When MCP is unreachable, the helper falls back to the bundled
+        mirror without any successful tool call landing on the server."""
         _, calls = _run_hook(tmp_path, "http://127.0.0.1:1")
         tool_calls = [c.get("name") for c in calls if isinstance(c, dict)]
         assert tool_calls == []
