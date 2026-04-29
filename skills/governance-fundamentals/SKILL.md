@@ -30,6 +30,16 @@ Four dimensions, updated through check-ins:
 
 The dimensions couple — E pulls toward I, S responds to complexity, V accumulates imbalance, **coherence** falls out of all four. Coherence is *structural health* (how well E/I/S/V hold together as a vector), **not a quality score for your work** — this is what makes the "do not game coherence" rule below meaningful. Full range is [0, 1]; the typical governed range is ~0.45–0.55, but coherence can travel anywhere in [0, 1] under stress — use `get_governance_metrics()` for current values. For the coupling math, see `references/eisv-deep.md`.
 
+### Two V channels (and what each one drives)
+
+`get_governance_metrics(lite=false)` exposes V in three places — `ode_eisv.V`, `behavioral_eisv.V`, and `primary_eisv.V` — and they can diverge significantly. Do not assume a single V.
+
+- **`ode_eisv.V`** — thermodynamic integrator, heavily damped, typically ~[−0.1, 0.1]. **Coherence is computed from this V.** That is why coherence often sits near 0.5 (tanh(0)=0 midpoint) regardless of what behavioral V is doing.
+- **`behavioral_eisv.V`** — observation-first EMA of actual agent behavior. Can swing to ±0.4. **Verdicts** use this channel once `behavioral_eisv.confidence ≥ 0.3`; before that, verdicts fall back to ODE.
+- **`primary_eisv`** — whichever channel is currently authoritative for verdicts. Check `primary_eisv_source` to see which.
+
+If you see flat coherence next to a swinging V, you are almost certainly comparing across channels. To move coherence you must move *ODE* V via sustained E-I imbalance, not via short-term behavioral swings. The `state_semantics` block in the metrics response is the runtime-authoritative version of this.
+
 ## Verdicts — What to Do
 
 Governance issues a verdict after each check-in. This is the operational signal:
