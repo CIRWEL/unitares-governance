@@ -51,7 +51,7 @@ Shared helper:
 
 Treat this as local runtime state. It should not be used as a source of truth over the server, but it is the first place to look for:
 
-- `continuity_token`
+- `continuity_token` when present for in-process proof-owned calls, not startup resume
 - `client_session_id`
 - `uuid`
 - `agent_id`
@@ -62,7 +62,7 @@ Treat this as local runtime state. It should not be used as a source of truth ov
 
 Typical session:
 
-- start, declare lineage, or proof-resume with `/governance-start`
+- start or declare lineage with `/governance-start`
 - do meaningful work
 - check in after a milestone, completed step, or decision point
 - diagnose only when needed
@@ -80,7 +80,7 @@ Do not treat every file edit as a governance event. High-signal check-ins are mo
 
 ## Commands
 
-- `/governance-start` to create, declare lineage, or proof-resume and refresh local continuity state
+- `/governance-start` to create or declare lineage and refresh local continuity state
 - `/checkin` for a governance update after meaningful work
 - `/diagnose` for identity, state, and operator diagnostics
 - `/dialectic` for structured review

@@ -100,7 +100,7 @@ def _onboard_ok_response(uuid: str, display_name: str) -> dict:
     }
 
 
-def test_unslotted_onboard_sends_bare_name(tmp_path: Path) -> None:
+def test_unslotted_onboard_sends_bare_name_and_force_new(tmp_path: Path) -> None:
     """Codex / stdio flows must not have their agent names rewritten — only
     slotted callers need the scoping, and changing the name silently for
     single-process flows would be a surprise regression."""
@@ -116,8 +116,10 @@ def test_unslotted_onboard_sends_bare_name(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "ok"
-    sent_name = transport.calls[0]["payload"]["arguments"]["name"]
-    assert sent_name == "cirwel"
+    sent_args = transport.calls[0]["payload"]["arguments"]
+    assert sent_args["name"] == "cirwel"
+    assert sent_args["force_new"] is True
+    assert "parent_agent_id" not in sent_args
 
 
 def test_slotted_onboard_sends_scoped_name(tmp_path: Path) -> None:
@@ -133,8 +135,9 @@ def test_slotted_onboard_sends_scoped_name(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "ok"
-    sent_name = transport.calls[0]["payload"]["arguments"]["name"]
-    assert sent_name == "cirwel#74608bf3"
+    sent_args = transport.calls[0]["payload"]["arguments"]
+    assert sent_args["name"] == "cirwel#74608bf3"
+    assert sent_args["force_new"] is True
 
 
 def test_two_slots_receive_distinct_server_calls(tmp_path: Path) -> None:
@@ -170,11 +173,10 @@ def test_two_slots_receive_distinct_server_calls(tmp_path: Path) -> None:
     assert name_b.startswith("cirwel#")
 
 
-def test_uuid_direct_resume_does_not_rescope_name(tmp_path: Path) -> None:
-    """When the slot cache already has a UUID, the helper resumes via the
-    ``identity()`` tool — no onboard, no name-claim, so the name never hits
-    the wire. This test guards against a future edit that would insert
-    name-scoping into the UUID-direct path (which would break resume)."""
+def test_cached_uuid_declares_lineage_on_fresh_onboard(tmp_path: Path) -> None:
+    """When the slot cache already has a UUID, startup must mint a fresh
+    process identity and declare the cached UUID as lineage. It must not
+    resume the UUID via ``identity()``."""
     # Seed the slot cache with an existing UUID, as if a prior run onboarded.
     cache_dir = tmp_path / ".unitares"
     cache_dir.mkdir()
@@ -183,19 +185,19 @@ def test_uuid_direct_resume_does_not_rescope_name(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    identity_response = {
+    onboard_response = {
         "result": {
             "success": True,
-            "uuid": "cccc3333-0000-0000-0000-000000000000",
-            "agent_id": "Claude_Code_cccc3333",
-            "client_session_id": "agent-cccc3333-000",
-            "continuity_token": "token-cccc3333",
-            "session_resolution_source": "agent_uuid_direct",
+            "uuid": "ffff6666-0000-0000-0000-000000000000",
+            "agent_id": "Claude_Code_ffff6666",
+            "client_session_id": "agent-ffff6666-000",
+            "continuity_token": "token-ffff6666",
+            "session_resolution_source": "force_new",
             "continuity_token_supported": True,
             "display_name": "cirwel",
         }
     }
-    transport = _FakeTransport(identity_response)
+    transport = _FakeTransport(onboard_response)
 
     result = run_onboard(
         server_url="http://unit-test",
@@ -207,23 +209,20 @@ def test_uuid_direct_resume_does_not_rescope_name(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "ok"
-    assert result["uuid"] == "cccc3333-0000-0000-0000-000000000000"
-    # Helper must have taken the identity() path — not onboard(). That path
-    # passes agent_uuid, not name, so a "name" field should NOT appear.
+    assert result["uuid"] == "ffff6666-0000-0000-0000-000000000000"
     sent = transport.calls[0]["payload"]
-    assert sent["name"] == "identity"
-    assert sent["arguments"]["agent_uuid"] == "cccc3333-0000-0000-0000-000000000000"
-    assert "name" not in sent["arguments"]
+    assert sent["name"] == "onboard"
+    assert sent["arguments"]["force_new"] is True
+    assert sent["arguments"]["name"] == "cirwel#f4e0ac58"
+    assert sent["arguments"]["parent_agent_id"] == "cccc3333-0000-0000-0000-000000000000"
+    assert sent["arguments"]["spawn_reason"] == "new_session"
+    assert "agent_uuid" not in sent["arguments"]
 
 
-def test_uuid_direct_resume_forwards_continuity_token_when_cached(tmp_path: Path) -> None:
-    """When the slot cache holds a continuity_token alongside the UUID, the
-    UUID-direct resume path must forward it. The server's Part C gate
-    requires the token's `aid` claim to match agent_uuid; without it the
-    call logs as a suspected hijack today and will be rejected once
-    UNITARES_IDENTITY_STRICT=strict is promoted to default. The token has
-    been written to cache since the first ok onboard — the prior helper
-    simply never read it back on the resume call."""
+def test_cached_token_is_not_sent_on_startup(tmp_path: Path) -> None:
+    """S1-b: startup lineage comes from UUID, not cached token/session
+    material. Tokens may still be used for in-process proof-owned calls
+    outside this helper."""
     cache_dir = tmp_path / ".unitares"
     cache_dir.mkdir()
     (cache_dir / "session-existing.json").write_text(
@@ -234,19 +233,19 @@ def test_uuid_direct_resume_forwards_continuity_token_when_cached(tmp_path: Path
         encoding="utf-8",
     )
 
-    identity_response = {
+    onboard_response = {
         "result": {
             "success": True,
-            "uuid": "dddd4444-0000-0000-0000-000000000000",
-            "agent_id": "Claude_Code_dddd4444",
-            "client_session_id": "agent-dddd4444-000",
+            "uuid": "eeee7777-0000-0000-0000-000000000000",
+            "agent_id": "Claude_Code_eeee7777",
+            "client_session_id": "agent-eeee7777-000",
             "continuity_token": "v1.refreshed.token",
-            "session_resolution_source": "agent_uuid_direct",
+            "session_resolution_source": "force_new",
             "continuity_token_supported": True,
             "display_name": "cirwel",
         }
     }
-    transport = _FakeTransport(identity_response)
+    transport = _FakeTransport(onboard_response)
 
     run_onboard(
         server_url="http://unit-test",
@@ -258,16 +257,14 @@ def test_uuid_direct_resume_forwards_continuity_token_when_cached(tmp_path: Path
     )
 
     sent_args = transport.calls[0]["payload"]["arguments"]
-    assert sent_args["agent_uuid"] == "dddd4444-0000-0000-0000-000000000000"
-    assert sent_args.get("continuity_token") == "v1.signedtokenpayload.signature", (
-        f"Token must be forwarded so the server's Part C gate can verify "
-        f"ownership. Sent args: {sent_args}"
-    )
+    assert sent_args["parent_agent_id"] == "dddd4444-0000-0000-0000-000000000000"
+    assert sent_args["force_new"] is True
+    assert "continuity_token" not in sent_args
+    assert "client_session_id" not in sent_args
 
 
-def test_uuid_direct_resume_omits_token_when_cache_lacks_one(tmp_path: Path) -> None:
-    """Backward-compat: legacy caches without a continuity_token still resume
-    by uuid alone (the gate logs in current `log` mode, doesn't reject)."""
+def test_force_new_flag_ignores_cached_lineage(tmp_path: Path) -> None:
+    """The legacy --force-new flag remains a way to ignore cached lineage."""
     cache_dir = tmp_path / ".unitares"
     cache_dir.mkdir()
     (cache_dir / "session-existing.json").write_text(
@@ -275,14 +272,14 @@ def test_uuid_direct_resume_omits_token_when_cache_lacks_one(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    identity_response = {
+    onboard_response = {
         "result": {
             "success": True,
-            "uuid": "eeee5555-0000-0000-0000-000000000000",
-            "agent_id": "Claude_Code_eeee5555",
+            "uuid": "ffff8888-0000-0000-0000-000000000000",
+            "agent_id": "Claude_Code_ffff8888",
         }
     }
-    transport = _FakeTransport(identity_response)
+    transport = _FakeTransport(onboard_response)
 
     run_onboard(
         server_url="http://unit-test",
@@ -290,14 +287,14 @@ def test_uuid_direct_resume_omits_token_when_cache_lacks_one(tmp_path: Path) -> 
         model_type="claude-code",
         workspace=tmp_path,
         slot="existing",
+        force_new=True,
         post_json=transport,
     )
 
     sent_args = transport.calls[0]["payload"]["arguments"]
-    assert "continuity_token" not in sent_args, (
-        f"Empty/missing token must not become a literal empty string in the "
-        f"request. Sent args: {sent_args}"
-    )
+    assert sent_args["force_new"] is True
+    assert "parent_agent_id" not in sent_args
+    assert "continuity_token" not in sent_args
 
 
 # ---- Integration: real server, real distinct UUIDs -------------------------

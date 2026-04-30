@@ -4,14 +4,15 @@
 Owns the flow:
 
 1. Read existing ``.unitares/session.json`` cache (if any).
-2. Call ``onboard`` — preferring ``continuity_token`` from cache, then
-   ``client_session_id``.
+2. Call ``onboard(force_new=true)``. When the cache has a UUID, pass it as
+   ``parent_agent_id`` with ``spawn_reason="new_session"``.
 3. If the server reports ``trajectory_required`` (identity exists but lacks
    a verifiable signal), return status=``trajectory_required`` with the
    server's recovery hint. We do NOT auto-retry with ``force_new=true``;
    that is an explicit operator decision, not an automatic one (see commit
    718ccd3 and the identity "never silently substitute" invariant).
-4. ``force_new=true`` is set only when the caller passed ``--force-new``.
+4. ``force_new=true`` is always sent on startup. ``--force-new`` only means
+   "ignore cached lineage".
 5. Only write the cache when onboard succeeded and produced a usable uuid.
 
 Emits a JSON line on stdout with the resolved fields for the shell hook to
@@ -65,9 +66,9 @@ def _scope_name_by_slot(agent_name: str, slot: str | None) -> str:
 
     Scoping the name by slot defeats the name-claim at the client. Each
     conversation (slot) gets its own label, its own UUID, its own
-    trajectory. Existing slot caches keep working: the UUID-direct resume
-    path in ``run_onboard`` runs before this, so pinned slots keep their
-    current identity regardless of name.
+    trajectory. Existing slot caches keep working as lineage anchors:
+    ``run_onboard`` passes the cached UUID as ``parent_agent_id`` on a
+    forced fresh onboard.
 
     Unslotted callers (Codex stdio, single-process flows) keep the legacy
     naming — this only scopes when a slot is actually provided.
@@ -205,72 +206,29 @@ def run_onboard(
     url = f"{server_url.rstrip('/')}/v1/tools/call"
     cache = read_cache(workspace, slot)
 
-    # Fast path: UUID-direct resume (like SDK agents).
-    # If we have a cached UUID, call identity(agent_uuid=...) instead of
-    # going through the token/session resolution chain.
-    #
-    # Forward continuity_token alongside agent_uuid when the cache has one.
-    # The server's Part C gate (UNITARES_IDENTITY_STRICT) requires the
-    # token's `aid` claim to match agent_uuid; without it the call logs as
-    # a suspected hijack today and will be rejected once strict mode
-    # becomes default. The token is already in cache (written below at
-    # write_cache time); the prior version simply did not forward it.
-    cached_uuid = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
-    if cached_uuid and not force_new:
-        identity_args: dict[str, Any] = {"agent_uuid": cached_uuid, "resume": True}
-        # S1 deprecation (identity ontology, docs/ontology/plan.md §S1):
-        # `continuity_token` is a compatibility surface for external
-        # clients; plugin-internal flows should declare lineage
-        # (parent_agent_id) on fresh onboard rather than resume via token.
-        # The token field is empty on v2 caches written by hooks/post-
-        # identity — only legacy v1 caches or external-client writes
-        # populate it here.
-        cached_token = (cache.get("continuity_token") or "").strip()
-        if cached_token:
-            identity_args["continuity_token"] = cached_token
-        raw = post_json(
-            url,
-            {"name": "identity", "arguments": identity_args},
-            timeout, auth_token,
-        )
-        parsed = unwrap_tool_response(raw)
-        if is_successful_onboard(parsed):
-            # UUID resume succeeded — update cache and return
-            new_cache = {
-                "server_url": server_url,
-                "agent_name": agent_name,
-                "slot": slot or "",
-                "uuid": parsed.get("uuid"),
-                "agent_id": parsed.get("agent_id") or parsed.get("resolved_agent_id") or "",
-                "client_session_id": parsed.get("client_session_id", ""),
-                "continuity_token": parsed.get("continuity_token", ""),
-                "session_resolution_source": parsed.get("session_resolution_source", ""),
-                "continuity_token_supported": parsed.get("continuity_token_supported", False),
-                "display_name": parsed.get("display_name", ""),
-            }
-            write_cache(workspace, new_cache, slot)
-            return {
-                "status": "ok",
-                **{k: v for k, v in new_cache.items() if k not in ("server_url", "slot")},
-            }
-        # UUID not found — fall through to fresh onboard
+    parent_agent_id = ""
+    if not force_new:
+        parent_agent_id = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
 
     # Scope the name by slot so the server's name-claim lookup doesn't bind
-    # this slot's onboard to an agent owned by another slot. UUID-direct
-    # resume already ran above for slots with a cached identity, so this
-    # only matters on the first onboard per slot.
+    # this slot's onboard to an agent owned by another slot. force_new is
+    # still explicit, but display-name scoping keeps parallel slots legible.
     scoped_name = _scope_name_by_slot(agent_name, slot)
-    arguments: dict[str, Any] = {"name": scoped_name, "model_type": model_type}
-    if force_new:
-        arguments["force_new"] = True
+    arguments: dict[str, Any] = {
+        "name": scoped_name,
+        "model_type": model_type,
+        "force_new": True,
+    }
+    if parent_agent_id:
+        arguments["parent_agent_id"] = parent_agent_id
+        arguments["spawn_reason"] = "new_session"
 
     raw = post_json(url, {"name": "onboard", "arguments": arguments}, timeout, auth_token)
     parsed = unwrap_tool_response(raw)
 
     if not is_successful_onboard(parsed):
-        # Per 718ccd3: never auto-force_new. Surface the error so the operator
-        # can decide (run `/governance-start --force` or clear the cache).
-        # Clobbering trajectory with force_new silently substitutes identity.
+        # Per 718ccd3: never auto-retry with a weaker/different identity
+        # posture. Surface the error so the operator can decide.
         recovery = parsed.get("recovery") or {}
         return {
             "status": "trajectory_required" if trajectory_required(parsed) else "onboard_failed",
@@ -292,6 +250,9 @@ def run_onboard(
         "continuity_token_supported": parsed.get("continuity_token_supported", False),
         "display_name": parsed.get("display_name", ""),
     }
+    if parent_agent_id:
+        new_cache["parent_agent_id"] = parent_agent_id
+        new_cache["spawn_reason"] = "new_session"
     write_cache(workspace, new_cache, slot)
 
     return {
@@ -315,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-type", default="claude-code")
     parser.add_argument("--workspace", default=os.getcwd())
     parser.add_argument("--force-new", action="store_true",
-                        help="Explicit opt-in to create a fresh identity (never automatic)")
+                        help="Create a fresh identity without declaring cached lineage")
     parser.add_argument(
         "--slot",
         default=os.environ.get("UNITARES_SESSION_SLOT", ""),

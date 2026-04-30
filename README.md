@@ -57,7 +57,7 @@ The principle is simple: prefer high-signal governance over high-frequency gover
 
 | Command | Description |
 |---------|-------------|
-| `/governance-start` | Create, declare lineage, or proof-resume a Codex/ChatGPT UNITARES session |
+| `/governance-start` | Create or declare lineage for a Codex/ChatGPT UNITARES session |
 | `/checkin` | Manual check-in after meaningful work |
 | `/diagnose` | Show current governance state plus identity/health diagnostics when needed |
 | `/dialectic` | Request a dialectic review |
