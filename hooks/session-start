@@ -262,6 +262,152 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
+# Scan-newest secondary lineage fallback (S20.2 / §3b)
+#
+# When a Claude session_id is present but its slot-scoped cache file does
+# not exist (cross-`/clear` case: harness minted a fresh session_id, prior
+# work in this workspace lives under a different slot), fall back to
+# `session_cache.py list session` and surface the **newest** prior slot's
+# UUID as a lineage candidate. This is the cross-`/clear` lineage
+# discovery the slot-scoped reader can't do alone.
+#
+# Strict constraints to honor existing axiom commitments:
+#   - SHOW ONE, NEVER A MENU. The KG bug 2026-04-20T00:09:51 forbids
+#     emitting a UUID list — that pattern invited fresh agents to
+#     pattern-match and resume into other instances' identities. Newest-
+#     only single hint preserves the lineage signal without the menu.
+#   - TTL filter (default 30d, `UNITARES_HOOK_LINEAGE_MAX_AGE_DAYS`).
+#     Stale slots from long-dead sessions otherwise sort to the top of
+#     `cmd_list` and mis-rank the newest-pick.
+#   - LINEAGE CANDIDATE, NEVER RESUME CREDENTIAL. Same framing as the
+#     slot-match path — declared via parent_agent_id, not bearer-resumed.
+#   - Honesty marker: the surfaced text says "scan-newest" so the agent
+#     can distinguish a slot match (high confidence — same Claude
+#     conversation) from a workspace match (this workspace's most recent
+#     prior session, but possibly a different harness invocation).
+# ---------------------------------------------------------------------------
+if [[ -n "${CLAUDE_SESSION_ID}" && -z "${WORKSPACE_LINEAGE_HINT}" ]]; then
+  SESSION_CACHE_HELPER=""
+  for candidate in \
+    "${PLUGIN_ROOT}/scripts/session_cache.py" \
+    "${PLUGIN_ROOT}/scripts/client/session_cache.py"
+  do
+    if [[ -f "${candidate}" ]]; then
+      SESSION_CACHE_HELPER="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -n "${SESSION_CACHE_HELPER}" ]]; then
+    LINEAGE_MAX_AGE_DAYS="${UNITARES_HOOK_LINEAGE_MAX_AGE_DAYS:-30}"
+    SCAN_LIST_JSON=$(python3 "${SESSION_CACHE_HELPER}" list --workspace "${PWD}" 2>/dev/null || true)
+    if [[ -n "${SCAN_LIST_JSON}" ]]; then
+      # Pipe JSON via stdin instead of argv to avoid ARG_MAX truncation in
+      # workspaces with many slot files. Argv would also fail silently
+      # under `|| true`, leaving operators with no breadcrumb.
+      WORKSPACE_LINEAGE_HINT=$(printf '%s' "${SCAN_LIST_JSON}" | \
+        python3 - "${LINEAGE_MAX_AGE_DAYS}" <<'PY' 2>/dev/null || true
+import json, sys
+from datetime import datetime, timezone, timedelta
+
+try:
+    entries = json.load(sys.stdin)
+    max_age_days = int(sys.argv[1])
+except Exception:
+    sys.exit(0)
+if not isinstance(entries, list):
+    sys.exit(0)
+
+now = datetime.now(timezone.utc)
+cutoff = now - timedelta(days=max(0, max_age_days))
+# Reject timestamps further in the future than small clock-skew
+# tolerance — a same-UID actor can write `session-attacker.json` with
+# updated_at="2099-..." and a chosen UUID, and a future-only TTL gate
+# would surface the attacker UUID as the lineage candidate. Cap the
+# accepted ceiling to "now plus a few minutes" so legitimate clock
+# drift still passes but planted-future entries are rejected.
+ceiling = now + timedelta(minutes=5)
+
+def parse_ts(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+# cmd_list sorts by parsed UTC datetime (S20.2 fix). Pick the first
+# entry that has an identity field AND is within [cutoff, ceiling].
+# Slot-less legacy rows (slot is null) are excluded — they can't be
+# the cross-`/clear` lineage we are looking for; only true
+# slot-scoped predecessors are. Do NOT early-break on a single
+# out-of-window entry — a malformed updated_at sorts to the bottom
+# but a future-dated planted entry can sort to the top, and we must
+# still find the next valid entry behind it.
+chosen = None
+for entry in entries:
+    if not isinstance(entry, dict):
+        continue
+    if entry.get("slot") is None:
+        continue
+    uuid = (entry.get("parent_agent_id") or "").strip()
+    if not uuid:
+        continue
+    ts = parse_ts(entry.get("updated_at"))
+    if ts is None:
+        continue
+    if ts < cutoff or ts > ceiling:
+        continue
+    chosen = (uuid, entry, ts)
+    break
+
+if chosen is None:
+    sys.exit(0)
+
+uuid, entry, ts = chosen
+date_part = ts.date().isoformat()
+slot = entry.get("slot") or ""
+age_secs = max(0, int((now - ts).total_seconds()))
+if age_secs < 3600:
+    age_text = f"{max(1, age_secs // 60)}m ago"
+elif age_secs < 86400:
+    age_text = f"{age_secs // 3600}h ago"
+else:
+    age_text = f"{age_secs // 86400}d ago"
+
+# Honesty marker comes FIRST so a pattern-matching agent that copies
+# only the surrounding context for the UUID still reads the
+# disclaimer. The framing is "another process-instance" rather than
+# "another Claude session" because the workspace can be shared with
+# Codex, dispatch workers, or ad-hoc scripts that write slot files
+# but aren't this Claude harness. The UUID appears only inside the
+# parent_agent_id template — never as a standalone backticked token —
+# so an agent that copies the literal string also copies its
+# lineage-only intent.
+print(
+    "Scan-newest workspace lineage candidate (NOT a slot match for the "
+    "current session). Another process-instance previously wrote a slot "
+    f"file in this workspace — slot `{slot}`, last active {date_part} "
+    f"({age_text}). The prior process may have been a different Claude "
+    "session (e.g. before `/clear`), a Codex run, a dispatch worker, "
+    "or an ad-hoc script.\n\nUnder the identity ontology "
+    "(unitares/docs/ontology/identity.md), a fresh process-instance "
+    "declares lineage rather than resuming identity. If — and only if — "
+    "you are continuing that prior process's work, include in the "
+    "onboard call below:\n"
+    f"    parent_agent_id=\"{uuid}\", spawn_reason=\"new_session\"\n"
+    "Otherwise omit `parent_agent_id` and onboard fresh — false "
+    "ancestry claims pollute the governance lineage DAG. Memory, KG "
+    "notes, and self-knowledge persist across instances; "
+    "governance-identity does not."
+)
+PY
+)
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Ping governance server
 # ---------------------------------------------------------------------------
 HEALTH_LOG="${UNITARES_SESSION_START_LOG:-/tmp/unitares-session-start.log}"

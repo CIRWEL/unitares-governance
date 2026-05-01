@@ -303,7 +303,26 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "updated_at": data.get("updated_at"),
                 "path": str(path),
             })
-    entries.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
+    # Sort by parsed UTC datetime, not raw ISO string. Mixed-offset
+    # timestamps (e.g., +05:30 vs +00:00) sort incorrectly by string
+    # comparison even though Python's `fromisoformat` normalizes them.
+    # Entries that fail to parse fall back to a sentinel that sorts last
+    # under reverse=True, so they don't displace real entries.
+    _MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
+
+    def _sort_ts(entry: dict[str, Any]) -> datetime:
+        raw = entry.get("updated_at")
+        if not isinstance(raw, str) or not raw:
+            return _MIN_UTC
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return _MIN_UTC
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    entries.sort(key=_sort_ts, reverse=True)
     print(json.dumps(entries))
     return 0
 

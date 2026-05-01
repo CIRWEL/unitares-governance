@@ -2,11 +2,14 @@
 description: "Show current UNITARES governance state and operator-relevant diagnostics"
 ---
 
-Start by checking for `.unitares/session.json` in the current workspace.
+Start by inventorying slot-scoped session caches in the current workspace.
 
 Use the shared helper in this plugin repo:
 
-- `scripts/session_cache.py get session`
+- `scripts/session_cache.py list --workspace "$PWD"` — slot inventory sorted newest-first
+- `scripts/session_cache.py get session --slot=<slot>` — read a specific cache
+
+Bare `get session` (no `--slot`) returns the legacy flat `session.json`, which under S20 is read-only-legacy — surface it only as a lineage candidate, never as the current process's identity.
 
 If continuity state exists:
 
@@ -46,7 +49,7 @@ If `health_check()` is used, also show:
 - degraded checks
 - first operator action
 
-If the live identity differs from `.unitares/session.json`, refresh the local cache with the latest continuity data.
+If the live identity differs from the slot-scoped cache, refresh that slot's cache with the latest continuity data via `scripts/session_cache.py set session --slot=<client_session_id> --merge --stamp`.
 
 Do not dump raw JSON unless the user explicitly asks for it.
 Prefer a short interpreted summary.
