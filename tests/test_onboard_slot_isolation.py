@@ -14,6 +14,8 @@ end-to-end promise that different slots yield different UUIDs.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import sys
 import urllib.error
 import urllib.request
@@ -120,6 +122,66 @@ def test_unslotted_onboard_sends_bare_name_and_force_new(tmp_path: Path) -> None
     assert sent_args["name"] == "cirwel"
     assert sent_args["force_new"] is True
     assert "parent_agent_id" not in sent_args
+
+
+def test_cache_file_is_mode_0600_and_omits_continuity_token(tmp_path: Path) -> None:
+    """S20.3: cache file must be owner-only (0600) and must not persist
+    continuity_token / continuity_token_supported.
+
+    Default Path.write_text inherits umask 022 → mode 0644 (world-readable
+    on a typical macOS setup). Even after S1-a narrows continuity_token,
+    client_session_id is still process-instance identity, so same-UID
+    readability remains a siphon surface — atomic 0600 write closes it.
+
+    The token fields stay in the in-process return value (transient) so a
+    caller can use them within the same process; lineage across
+    process-instances is declared via parent_agent_id (S1-a / identity.md
+    v2 ontology), not resumed via cached token.
+    """
+    transport = _FakeTransport(_onboard_ok_response("cccc3333-0000-0000-0000-000000000000", "cirwel"))
+
+    result = run_onboard(
+        server_url="http://unit-test",
+        agent_name="cirwel",
+        model_type="claude-code",
+        workspace=tmp_path,
+        slot=None,
+        post_json=transport,
+    )
+
+    assert result["status"] == "ok"
+    cache_file = tmp_path / ".unitares" / "session.json"
+    assert cache_file.exists()
+    mode = stat.S_IMODE(os.stat(cache_file).st_mode)
+    assert mode == 0o600, f"expected mode 0600, got {oct(mode)}"
+
+    written = json.loads(cache_file.read_text())
+    assert "continuity_token" not in written
+    assert "continuity_token_supported" not in written
+    # Result still carries the transient token from the server response.
+    assert result["continuity_token"]
+    assert result["continuity_token_supported"] is True
+
+
+def test_write_failure_does_not_leave_tmp_file(tmp_path: Path, monkeypatch: Any) -> None:
+    """S20.3: a failed atomic write unlinks the temp file rather than
+    leaving a .tmp turd in ``.unitares/``."""
+    import onboard_helper
+
+    real_replace = os.replace
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(onboard_helper.os, "replace", boom)
+    with pytest.raises(OSError):
+        onboard_helper._write_cache(tmp_path, {"uuid": "x"}, slot=None)
+
+    cache_dir = tmp_path / ".unitares"
+    if cache_dir.exists():
+        stragglers = [p for p in cache_dir.iterdir() if p.suffix == ".tmp"]
+        assert stragglers == [], f"temp file leaked: {stragglers}"
+    monkeypatch.setattr(onboard_helper.os, "replace", real_replace)
 
 
 def test_slotted_onboard_sends_scoped_name(tmp_path: Path) -> None:

@@ -94,16 +94,26 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     the governance API. Inlined rather than imported from unitares_sdk
     because this helper is intentionally dependency-free — shared by
     thin plugin clients that don't pull in the SDK.
+
+    On any write/chmod/replace failure, the temp file is unlinked rather
+    than left as a turd in the cache directory.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
-        os.write(fd, data)
-        os.fchmod(fd, 0o600)
-    finally:
-        os.close(fd)
-    os.replace(tmp, str(path))
+        try:
+            os.write(fd, data)
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _load_payload(args: argparse.Namespace) -> dict[str, Any]:
