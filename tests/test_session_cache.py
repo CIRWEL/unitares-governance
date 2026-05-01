@@ -467,3 +467,34 @@ def test_set_session_allows_stamp_when_identity_already_cached(tmp_path: Path) -
     assert cached["client_session_id"] == full["client_session_id"]
     assert cached["last_checkin_ts"] == 1777281496
     assert "updated_at" in cached
+
+
+def test_write_json_failure_does_not_leave_tmp_file(tmp_path: Path, monkeypatch) -> None:
+    """S20.3: a failed atomic write unlinks the temp file rather than
+    leaving a .tmp turd in the cache directory.
+
+    Imports session_cache.py in-process (rather than via subprocess) so we
+    can monkeypatch os.replace to simulate the failure path.
+    """
+    import importlib.util
+    import os
+
+    spec = importlib.util.spec_from_file_location("session_cache_under_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    cache_dir = tmp_path / ".unitares"
+    cache_dir.mkdir()
+    target = cache_dir / "session.json"
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(module.os, "replace", boom)
+    import pytest as _pytest
+
+    with _pytest.raises(OSError):
+        module._write_json(target, {"uuid": "x"})
+
+    stragglers = [p for p in cache_dir.iterdir() if p.suffix == ".tmp"]
+    assert stragglers == [], f"temp file leaked: {stragglers}"
