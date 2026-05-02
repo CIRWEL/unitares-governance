@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -46,6 +47,13 @@ CACHE_FILES = {
     "session": "session.json",
     "milestone": "last-milestone.json",
 }
+
+# Mirrors the post-sanitization shape produced by `_slot_suffix`. Used by
+# `_parse_session_filename` to reject filenames that bypassed the writer
+# (a same-UID actor can drop arbitrary `session-*.json` directly on disk;
+# the parsed slot is later reflected into agent context, where backticks
+# or whitespace would break the surrounding markdown code-span).
+_SLOT_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 def _workspace_path(raw: str | None) -> Path:
@@ -253,11 +261,16 @@ def _parse_session_filename(name: str) -> str | None:
     or ``None`` for the flat ``session.json`` (no slot) and for any name that
     does not match the pattern. Slot strings here are pre-sanitized (the
     writer ran them through ``_slot_suffix``) so callers receive the safe
-    form already on disk.
+    form already on disk — but a same-UID actor can write filenames
+    directly, bypassing the writer, so the parsed slot is re-validated
+    against ``_SLOT_PATTERN`` before being returned.
     """
     if not name.startswith("session-") or not name.endswith(".json"):
         return None
-    return name[len("session-") : -len(".json")] or None
+    raw = name[len("session-") : -len(".json")]
+    if not raw or not _SLOT_PATTERN.fullmatch(raw):
+        return None
+    return raw
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -303,7 +316,26 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "updated_at": data.get("updated_at"),
                 "path": str(path),
             })
-    entries.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
+    # Sort by parsed UTC datetime, not raw ISO string. Mixed-offset
+    # timestamps (e.g., +05:30 vs +00:00) sort incorrectly by string
+    # comparison even though Python's `fromisoformat` normalizes them.
+    # Entries that fail to parse fall back to a sentinel that sorts last
+    # under reverse=True, so they don't displace real entries.
+    _MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
+
+    def _sort_ts(entry: dict[str, Any]) -> datetime:
+        raw = entry.get("updated_at")
+        if not isinstance(raw, str) or not raw:
+            return _MIN_UTC
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return _MIN_UTC
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    entries.sort(key=_sort_ts, reverse=True)
     print(json.dumps(entries))
     return 0
 

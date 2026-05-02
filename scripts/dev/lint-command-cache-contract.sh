@@ -75,6 +75,26 @@ for file in "${FILES[@]}"; do
     done < <(grep -nE '^\s*-\s+\`continuity_token\`\s*$' "$file" 2>/dev/null || true)
 done
 
+# Rule 3 (S20.2): bare `session_cache.py get session` reads the legacy flat
+# session.json — the same anti-pattern Rule 1 catches on the write side.
+# Commands must read via `--slot=<id>` or first call `list` to discover the
+# slot. Allow `get` of other kinds (e.g. milestone) and any `get session`
+# invocation that includes `--slot`.
+while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    file=${match%%:*}
+    line=${match#*:}
+    line_no=${line%%:*}
+    content=${line#*:}
+    if [[ "$content" == *"--slot"* ]]; then
+        continue
+    fi
+    echo "[lint] ${file}:${line_no} — \`session_cache.py get session\` without --slot"
+    echo "       offending: ${content}"
+    echo "       fix: discover slot via \`session_cache.py list\` then read with --slot=<slot> (S20.2 §3b)."
+    FAIL=1
+done < <(grep -nE 'session_cache\.py +get +session' "${FILES[@]}" 2>/dev/null || true)
+
 if [[ $FAIL -eq 0 ]]; then
     echo "[lint] OK — ${#FILES[@]} command file(s) checked"
 fi

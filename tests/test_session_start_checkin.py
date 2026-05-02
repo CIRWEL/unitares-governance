@@ -338,19 +338,34 @@ class TestWorkspaceLocalLineage:
         assert "Shared_Cache_Agent" not in ctx
         assert "v1.legacy-token-should-be-ignored" not in ctx
 
-    def test_slot_mismatch_does_not_surface_other_sessions_lineage(self, tmp_path):
+    def test_slot_mismatch_does_not_surface_as_same_session_lineage(self, tmp_path):
         """Slot scoping must actually scope. A cache file written by a
-        different claude session in the same workspace (different session_id)
-        must not be surfaced as this session's lineage.
+        different claude session in the same workspace must NOT be surfaced
+        as if it were this session's slot match — the slot-match path's
+        ``"A prior process-instance ran in this workspace"`` framing is
+        false for cross-session caches.
+
+        The scan-newest fallback (S20.2) surfaces other-slot caches
+        DELIBERATELY as workspace lineage candidates, but only with the
+        ``"scan-newest workspace lineage hint, not a slot match"`` honesty
+        marker that distinguishes them. Both paths can fire on the same
+        UUID — the slot-match-framing falsehood is the actual axiom
+        violation here.
+
+        For a TTL-stale slot, neither path fires — see ``test_scan_newest_filtered_by_ttl``.
         """
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".unitares").mkdir()
+        # Far older than the 30d scan-newest TTL — guarantees the
+        # cross-test invariant holds against any "today" the suite runs on.
+        from datetime import datetime, timezone, timedelta
+        stale_ts = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
         (workspace / ".unitares" / "session-other-slot.json").write_text(json.dumps({
             "uuid": "dddddddd-1111-2222-3333-666666666666",
             "agent_id": "Other_Session",
             "schema_version": 2,
-            "updated_at": "2026-04-20T00:00:00+00:00",
+            "updated_at": stale_ts,
         }))
 
         stdout, _ = _serve_and_run(
@@ -358,6 +373,10 @@ class TestWorkspaceLocalLineage:
         )
         ctx = json.loads(stdout).get("additional_context", "")
 
+        # Slot-match framing must not appear at all (this is not a slot match
+        # for the current session_id).
+        assert "A prior process-instance ran in this workspace" not in ctx
+        # And because the cache is >30d old, scan-newest also drops it.
         assert "dddddddd-1111-2222-3333-666666666666" not in ctx
         assert "Other_Session" not in ctx
 
@@ -392,6 +411,302 @@ class TestWorkspaceLocalLineage:
         # NOT appear is the resume hint pointing at a workspace cache.
         assert "./.unitares/session.json" not in ctx
         assert "To resume that identity" not in ctx
+
+
+class TestScanNewestLineageFallback:
+    """S20.2 §3b: cross-`/clear` lineage discovery.
+
+    When ``CLAUDE_SESSION_ID`` is set but its slot-scoped cache file does not
+    exist (the harness minted a fresh session_id and prior work in this
+    workspace lives under a different slot), the hook falls back to
+    ``session_cache.py list session`` and surfaces the *newest* prior slot's
+    UUID as a lineage candidate. Strict guarantees:
+
+    - One UUID, never a menu (KG bug 2026-04-20T00:09:51).
+    - Filtered by ``UNITARES_HOOK_LINEAGE_MAX_AGE_DAYS`` (default 30).
+    - Surfaced as lineage candidate, not resume credential.
+    - Suppressed entirely when a slot match exists (the slot-match path
+      is more specific and wins).
+    """
+
+    def _now_iso(self, *, days_ago: int = 0, hours_ago: int = 0) -> str:
+        from datetime import datetime, timezone, timedelta
+        ts = datetime.now(timezone.utc) - timedelta(days=days_ago, hours=hours_ago)
+        return ts.isoformat()
+
+    def test_scan_newest_surfaces_when_slot_misses(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        # Two prior sessions; newest should win.
+        (workspace / ".unitares" / "session-older.json").write_text(json.dumps({
+            "uuid": "11111111-aaaa-bbbb-cccc-000000000001",
+            "agent_id": "Older_Session",
+            "display_name": "Older_Session",
+            "client_session_id": "agent-older",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=5),
+        }))
+        (workspace / ".unitares" / "session-newer.json").write_text(json.dumps({
+            "uuid": "22222222-aaaa-bbbb-cccc-000000000002",
+            "agent_id": "Newer_Session",
+            "display_name": "Newer_Session",
+            "client_session_id": "agent-newer",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=1),
+        }))
+
+        # Fresh slot — slot-scoped cache does not exist for this session_id.
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Newest UUID is surfaced; older is suppressed (one, not menu).
+        assert "22222222-aaaa-bbbb-cccc-000000000002" in ctx
+        assert "11111111-aaaa-bbbb-cccc-000000000001" not in ctx
+        # Honesty marker — appears BEFORE the UUID (council finding) so a
+        # pattern-matching agent that copies the surrounding sentence still
+        # reads the disclaimer.
+        marker_idx = ctx.find("Scan-newest workspace lineage candidate")
+        uuid_idx = ctx.find("22222222-aaaa-bbbb-cccc-000000000002")
+        assert marker_idx >= 0 and uuid_idx >= 0 and marker_idx < uuid_idx
+        # Framing must NOT claim "different Claude session" — the workspace
+        # can have Codex/dispatch/ad-hoc writers; over-claiming is the §9
+        # axiom #3 violation the council flagged.
+        assert "different Claude session" not in ctx or (
+            "may have been a different Claude session" in ctx
+        )  # only the hedged "may have been" form is allowed
+        # Lineage framing, not resume.
+        assert "parent_agent_id" in ctx
+        assert "identity(agent_uuid=" not in ctx
+        assert "resume=true" not in ctx
+        # The UUID must appear ONLY inside the parent_agent_id="..." template
+        # — not as a standalone backticked token. An agent that copies the
+        # literal string then also copies the lineage-only intent.
+        bare_backticked = f"`22222222-aaaa-bbbb-cccc-000000000002`"
+        assert bare_backticked not in ctx
+
+    def test_scan_newest_filtered_by_ttl(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session-old.json").write_text(json.dumps({
+            "uuid": "33333333-aaaa-bbbb-cccc-000000000003",
+            "agent_id": "Long_Dead",
+            "client_session_id": "agent-long-dead",
+            "schema_version": 2,
+            "updated_at": self._now_iso(days_ago=60),
+        }))
+
+        env = {"UNITARES_HOOK_LINEAGE_MAX_AGE_DAYS": "30"}
+        stdout, _ = _serve_and_run(
+            tmp_path,
+            cwd=workspace,
+            claude_session_id="post-clear-session",
+            extra_env=env,
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # >30 day slot is filtered out; nothing surfaces.
+        assert "33333333-aaaa-bbbb-cccc-000000000003" not in ctx
+        assert "scan-newest" not in ctx
+
+    def test_scan_newest_skipped_when_slot_match_exists(self, tmp_path):
+        """Slot match wins. Never run scan-newest when we already have a
+        same-session lineage anchor — that would surface a *second* UUID
+        and reintroduce the menu pattern S20 forbids."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        slot = "current-slot"
+        (workspace / ".unitares" / f"session-{slot}.json").write_text(json.dumps({
+            "uuid": "44444444-aaaa-bbbb-cccc-000000000004",
+            "agent_id": "Current_Slot_Match",
+            "display_name": "Current_Slot_Match",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=2),
+        }))
+        (workspace / ".unitares" / "session-other.json").write_text(json.dumps({
+            "uuid": "55555555-aaaa-bbbb-cccc-000000000005",
+            "agent_id": "Should_Not_Appear",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=1),  # newer than slot match!
+        }))
+
+        stdout, _ = _serve_and_run(tmp_path, cwd=workspace, claude_session_id=slot)
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Slot match surfaces.
+        assert "44444444-aaaa-bbbb-cccc-000000000004" in ctx
+        # Other slot — even though newer — must NOT appear.
+        assert "55555555-aaaa-bbbb-cccc-000000000005" not in ctx
+        assert "scan-newest" not in ctx
+
+    def test_scan_newest_quiet_with_empty_unitares_dir(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()  # empty dir
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "scan-newest" not in ctx
+        assert "lineage" not in ctx.lower() or "no" in ctx.lower()
+
+    def test_scan_newest_rejects_future_timestamp_planted_entry(self, tmp_path):
+        """C1 from the council review: a same-UID actor (Codex, dispatch
+        worker, ad-hoc script) can drop ``session-attacker.json`` with
+        ``updated_at`` set to a far-future date and a chosen UUID. Without
+        an upper-bound check, that planted UUID would sort to the top of
+        cmd_list and become the lineage candidate.
+
+        The hook caps accepted timestamps at ``now + 5min`` (small clock-
+        skew tolerance) and falls through to the next valid entry.
+        """
+        from datetime import datetime, timezone, timedelta
+        future_ts = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        # Planted future-dated entry with a chosen UUID.
+        (workspace / ".unitares" / "session-attacker.json").write_text(json.dumps({
+            "uuid": "deadbeef-aaaa-bbbb-cccc-000000000999",
+            "agent_id": "Attacker_Plant",
+            "client_session_id": "agent-attacker",
+            "schema_version": 2,
+            "updated_at": future_ts,
+        }))
+        # Legitimate fresh entry behind it — should win after future is rejected.
+        (workspace / ".unitares" / "session-real.json").write_text(json.dumps({
+            "uuid": "77777777-aaaa-bbbb-cccc-000000000777",
+            "agent_id": "Real_Predecessor",
+            "client_session_id": "agent-real",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=2),
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Planted UUID must NOT surface.
+        assert "deadbeef-aaaa-bbbb-cccc-000000000999" not in ctx
+        assert "Attacker_Plant" not in ctx
+        # Real predecessor surfaces in its place — the loop fell through.
+        assert "77777777-aaaa-bbbb-cccc-000000000777" in ctx
+
+    def test_scan_newest_falls_through_malformed_updated_at(self, tmp_path):
+        """T2 from the council review: when the newest-sorted entry has a
+        malformed ``updated_at``, parse_ts returns None and the loop must
+        fall through to the next valid entry — not give up after the first.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        # Malformed entry — cmd_list sinks unparseable timestamps to the
+        # bottom under the new sort, so we use an explicit non-string
+        # value to verify the hook's own parse_ts also rejects it cleanly
+        # if cmd_list ever changes.
+        (workspace / ".unitares" / "session-malformed.json").write_text(json.dumps({
+            "uuid": "88888888-aaaa-bbbb-cccc-000000000888",
+            "agent_id": "Malformed_Ts",
+            "client_session_id": "agent-malformed",
+            "schema_version": 2,
+            "updated_at": "not-a-real-iso-timestamp",
+        }))
+        # Valid entry — should be chosen since malformed one is dropped.
+        (workspace / ".unitares" / "session-valid.json").write_text(json.dumps({
+            "uuid": "99999999-aaaa-bbbb-cccc-000000000999",
+            "agent_id": "Valid_Predecessor",
+            "client_session_id": "agent-valid",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=3),
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "88888888-aaaa-bbbb-cccc-000000000888" not in ctx
+        assert "99999999-aaaa-bbbb-cccc-000000000999" in ctx
+
+    def test_scan_newest_skips_legacy_flat_session_json(self, tmp_path):
+        """Legacy flat ``session.json`` (slot=None in cmd_list output) must
+        not be surfaced as lineage even when it is the only file present.
+        Same axiom as ``test_bare_session_json_is_not_surfaced``: the flat
+        file is a cross-instance shared artifact, not a trustworthy
+        per-process lineage anchor."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        (workspace / ".unitares" / "session.json").write_text(json.dumps({
+            "uuid": "66666666-aaaa-bbbb-cccc-000000000006",
+            "agent_id": "Legacy_Flat",
+            "client_session_id": "agent-legacy",
+            "schema_version": 1,
+            "updated_at": self._now_iso(hours_ago=1),
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        assert "66666666-aaaa-bbbb-cccc-000000000006" not in ctx
+        assert "Legacy_Flat" not in ctx
+
+    def test_scan_newest_rejects_unsafe_slot_filename(self, tmp_path):
+        """A same-UID actor can drop ``session-*.json`` files directly on
+        disk, bypassing the writer's ``_slot_suffix`` sanitization. The
+        parsed slot is later reflected into agent context as ``slot
+        \\`{slot}\\```; a backtick or whitespace in the slot would
+        terminate the markdown code-span and become a prompt-injection
+        vector. ``_parse_session_filename`` re-validates the parsed slot
+        against the same shape ``_slot_suffix`` produces, so unsafe
+        filenames are skipped — the loop falls through to the next
+        well-formed entry.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        # Filename with a backtick — bypasses _slot_suffix because the
+        # writer would have replaced it with `_`. cmd_list must drop it.
+        unsafe_name = "session-bad`tick.json"
+        (workspace / ".unitares" / unsafe_name).write_text(json.dumps({
+            "uuid": "bad00000-aaaa-bbbb-cccc-000000000bad",
+            "agent_id": "Backtick_Plant",
+            "client_session_id": "agent-backtick",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=1),  # newer than the valid one
+        }))
+        # Well-formed predecessor; should win after the unsafe one is dropped.
+        (workspace / ".unitares" / "session-real.json").write_text(json.dumps({
+            "uuid": "aaaaaaaa-aaaa-bbbb-cccc-000000000aaa",
+            "agent_id": "Real_Predecessor",
+            "client_session_id": "agent-real",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=2),
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Unsafe filename must NOT surface — UUID and agent_id stay out
+        # of agent context, and the literal backtick never appears in the
+        # `slot \`{slot}\`` reflection.
+        assert "bad00000-aaaa-bbbb-cccc-000000000bad" not in ctx
+        assert "Backtick_Plant" not in ctx
+        assert "bad`tick" not in ctx
+        # Real predecessor wins — loop fell through.
+        assert "aaaaaaaa-aaaa-bbbb-cccc-000000000aaa" in ctx
 
 
 class TestSkillInjection:

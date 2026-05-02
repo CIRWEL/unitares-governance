@@ -2,13 +2,16 @@
 description: "Manual UNITARES governance check-in after meaningful work"
 ---
 
-Before calling tools, check for `.unitares/session.json` in the current workspace.
+Before calling tools, check for slot-scoped session caches in the current workspace.
 
 Use the shared helper in this plugin repo:
 
-- `scripts/session_cache.py get session`
+- `scripts/session_cache.py list --workspace "$PWD"` — slot inventory sorted newest-first; pick the entry whose `slot` matches your current `client_session_id`, or the newest entry if you do not have one yet
+- `scripts/session_cache.py get session --slot=<slot>` — read that specific cache
 
-If it exists:
+Bare `get session` (no `--slot`) returns the legacy flat `session.json`, which under S20 is read-only-legacy — do not write back to it and do not assume it corresponds to this process-instance.
+
+If a matching cache exists:
 
 - use `uuid` as the expected local identity anchor, not proof by itself
 - pass `continuity_token` when available for ownership proof
