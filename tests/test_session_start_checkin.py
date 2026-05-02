@@ -661,6 +661,53 @@ class TestScanNewestLineageFallback:
         assert "66666666-aaaa-bbbb-cccc-000000000006" not in ctx
         assert "Legacy_Flat" not in ctx
 
+    def test_scan_newest_rejects_unsafe_slot_filename(self, tmp_path):
+        """A same-UID actor can drop ``session-*.json`` files directly on
+        disk, bypassing the writer's ``_slot_suffix`` sanitization. The
+        parsed slot is later reflected into agent context as ``slot
+        \\`{slot}\\```; a backtick or whitespace in the slot would
+        terminate the markdown code-span and become a prompt-injection
+        vector. ``_parse_session_filename`` re-validates the parsed slot
+        against the same shape ``_slot_suffix`` produces, so unsafe
+        filenames are skipped — the loop falls through to the next
+        well-formed entry.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".unitares").mkdir()
+        # Filename with a backtick — bypasses _slot_suffix because the
+        # writer would have replaced it with `_`. cmd_list must drop it.
+        unsafe_name = "session-bad`tick.json"
+        (workspace / ".unitares" / unsafe_name).write_text(json.dumps({
+            "uuid": "bad00000-aaaa-bbbb-cccc-000000000bad",
+            "agent_id": "Backtick_Plant",
+            "client_session_id": "agent-backtick",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=1),  # newer than the valid one
+        }))
+        # Well-formed predecessor; should win after the unsafe one is dropped.
+        (workspace / ".unitares" / "session-real.json").write_text(json.dumps({
+            "uuid": "aaaaaaaa-aaaa-bbbb-cccc-000000000aaa",
+            "agent_id": "Real_Predecessor",
+            "client_session_id": "agent-real",
+            "schema_version": 2,
+            "updated_at": self._now_iso(hours_ago=2),
+        }))
+
+        stdout, _ = _serve_and_run(
+            tmp_path, cwd=workspace, claude_session_id="post-clear-session"
+        )
+        ctx = json.loads(stdout).get("additional_context", "")
+
+        # Unsafe filename must NOT surface — UUID and agent_id stay out
+        # of agent context, and the literal backtick never appears in the
+        # `slot \`{slot}\`` reflection.
+        assert "bad00000-aaaa-bbbb-cccc-000000000bad" not in ctx
+        assert "Backtick_Plant" not in ctx
+        assert "bad`tick" not in ctx
+        # Real predecessor wins — loop fell through.
+        assert "aaaaaaaa-aaaa-bbbb-cccc-000000000aaa" in ctx
+
 
 class TestSkillInjection:
     """Fundamentals skill content is injected on both paths (online/offline)."""
