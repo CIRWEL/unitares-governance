@@ -21,7 +21,7 @@ Use it to:
 
 ## What Lives Elsewhere
 
-- `governance-mcp-v1` contains the runtime, MCP server, storage, health checks, and governance logic
+- `unitares` contains the runtime, MCP server, storage, health checks, and governance logic
 - `unitares-governance` contains the agent-facing plugin and integration layer
 - optional bridges like Discord can remain separate integrations
 
