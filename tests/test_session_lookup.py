@@ -45,12 +45,12 @@ def test_resolve_prefers_slotted_file(tmp_path):
     assert resolve_session_file(tmp_path, "my-slot") == slotted
 
 
-def test_resolve_falls_back_to_unslotted(tmp_path):
+def test_resolve_with_slot_does_not_fall_back_to_unslotted(tmp_path):
     (tmp_path / ".unitares").mkdir()
     unslotted = tmp_path / ".unitares" / "session.json"
     unslotted.write_text("{}")
-    # slot is set but no slotted file exists; fall back
-    assert resolve_session_file(tmp_path, "my-slot") == unslotted
+    # A live slot must not inherit the legacy flat cache when the slot misses.
+    assert resolve_session_file(tmp_path, "my-slot") is None
 
 
 def test_resolve_returns_none_when_nothing_exists(tmp_path, monkeypatch):

@@ -46,8 +46,11 @@ def _slot_filename(slot: Optional[str]) -> str:
 
 
 def resolve_session_file(workspace: str | Path, slot: Optional[str]) -> Optional[Path]:
-    """Return the slot-scoped session file path, or a workspace-local
-    legacy path when ``slot`` is empty. Returns None if no file exists.
+    """Return the matching session file path.
+
+    With a slot, only the slot-scoped cache is eligible. Without a slot,
+    a workspace-local legacy path is eligible. Returns None if no matching
+    file exists.
 
     Identity-honesty note (2026-04-18): the prior ``$HOME/.unitares/session.json``
     last-resort fallback has been removed. It was an axiom-violating shared
@@ -63,10 +66,12 @@ def resolve_session_file(workspace: str | Path, slot: Optional[str]) -> Optional
     slotted = unitares_dir / _slot_filename(slot)
     if slotted.exists():
         return slotted
-    # Workspace-local unslotted fallback is still OK — different workspaces
-    # have different .unitares/ dirs, so parallel sessions in separate
-    # projects cannot collide on it. Only the removed $HOME fallback was
-    # a true cross-agent shared location.
+    if slot:
+        return None
+    # Workspace-local unslotted lookup is still OK when the caller has no
+    # slot — different workspaces have different .unitares/ dirs, so
+    # parallel sessions in separate projects cannot collide on it. Only the
+    # removed $HOME fallback was a true cross-agent shared location.
     unslotted = unitares_dir / "session.json"
     if unslotted.exists():
         return unslotted

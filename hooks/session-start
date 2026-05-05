@@ -442,7 +442,7 @@ Ontology: unitares/docs/ontology/identity.md  ·  Recovery: run /diagnose."
 No identity has been created on your behalf. Your MCP stdio transport is
 unbound. As your first governance tool call, invoke:
 
-    onboard(purpose=\"<what you're doing>\", force_new=true)
+    onboard(force_new=true)
 
 Under the identity ontology (unitares/docs/ontology/identity.md), fresh
 process-instances mint fresh governance-identity. \`force_new=true\` is

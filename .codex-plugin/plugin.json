@@ -1,6 +1,6 @@
 {
   "name": "unitares-governance",
-  "version": "0.3.0",
+  "version": "0.4.2",
   "description": "Governance client for UNITARES: onboarding, diagnostics, dialectic review, and knowledge graph guidance.",
   "author": {
     "name": "CIRWEL",
@@ -30,7 +30,7 @@
     ],
     "websiteURL": "https://github.com/CIRWEL/unitares-governance-plugin",
     "defaultPrompt": [
-      "Start or resume my UNITARES session in Codex.",
+      "Start or continue my UNITARES session in Codex.",
       "Check me into UNITARES after this milestone.",
       "Diagnose my current UNITARES continuity and governance state."
     ],

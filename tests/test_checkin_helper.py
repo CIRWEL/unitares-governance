@@ -159,6 +159,19 @@ def test_payload_shape(monkeypatch, tmp_path):
     assert args["continuity_token"] == "v1.tok"
     assert args["metadata"]["source"] == "plugin_hook"
     assert args["metadata"]["event"] == "turn_stop"
+    assert args["metadata"]["plugin_version"] == checkin._plugin_version()
+
+
+def test_plugin_version_matches_package_metadata():
+    """Package manifests and hook telemetry must not drift apart."""
+    plugin_root = Path(__file__).parent.parent
+    versions = []
+    for rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
+        data = json.loads((plugin_root / rel).read_text(encoding="utf-8"))
+        versions.append(data["version"])
+
+    assert len(set(versions)) == 1
+    assert checkin._plugin_version() == versions[0]
 
 
 def test_payload_redacts_secrets(monkeypatch, tmp_path):

@@ -27,11 +27,28 @@ from _redact import redact_secrets
 
 DEFAULT_SERVER_URL = "http://localhost:8767"
 DEFAULT_LOG_PATH = "~/.unitares/checkins.log"
+DEFAULT_PLUGIN_VERSION = "0.4.2"
 # process_agent_update can take 5–10s under the anyio-asyncio mitigation
 # paths in governance_core. 20s gives headroom without wedging Claude
 # turns for absurd lengths when governance is genuinely hung.
 POST_TIMEOUT_SEC = 20.0
 RESPONSE_TEXT_MAX = 512
+
+
+def _plugin_version() -> str:
+    """Read package metadata so hook telemetry tracks the installed plugin."""
+    plugin_root = Path(__file__).resolve().parent.parent
+    versions: list[str] = []
+    for rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
+        path = plugin_root / rel
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        version = data.get("version")
+        if isinstance(version, str) and version:
+            versions.append(version)
+    return versions[0] if versions else DEFAULT_PLUGIN_VERSION
 
 
 def _is_killed() -> bool:
@@ -125,7 +142,7 @@ def submit_checkin(
     slot: str,
     uuid: str = "",
     server_url: Optional[str] = None,
-    plugin_version: str = "0.3.0",
+    plugin_version: Optional[str] = None,
 ) -> str:
     """Send one check-in. Returns a status string suitable for logging."""
     if _is_killed():
@@ -145,7 +162,7 @@ def submit_checkin(
                 "metadata": {
                     "source": "plugin_hook",
                     "event": event,
-                    "plugin_version": plugin_version,
+                    "plugin_version": plugin_version or _plugin_version(),
                 },
             },
         }
@@ -173,7 +190,7 @@ def _cli() -> int:
     p.add_argument("--slot", required=True)
     p.add_argument("--uuid", default="")
     p.add_argument("--server-url", default=None)
-    p.add_argument("--plugin-version", default="0.3.0")
+    p.add_argument("--plugin-version", default=None)
     args = p.parse_args()
 
     status = submit_checkin(

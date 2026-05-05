@@ -6,10 +6,9 @@ the agent's behalf AND does NOT surface other instances' UUIDs as a
 resume menu. It only:
 
   1. Confirms governance is reachable.
-  2. Suggests onboard() — fresh identity by default.
-  3. If THIS workspace has its own continuity cache (./.unitares/session.json,
-     written by the post-identity hook on a prior run in this directory),
-     suggests resuming via that signed continuity_token.
+  2. Suggests onboard(force_new=true) — fresh identity by default.
+  3. If THIS workspace has slot-scoped continuity state, surfaces a lineage
+     candidate for parent_agent_id, not a resume credential.
   4. Never enumerates ~/.unitares/session-*.json — those are other instances'
      identities, and surfacing them as an unfiltered "Recent session UUIDs"
      menu invited cross-instance hijack (KG bug 2026-04-20T00:09:51).
@@ -208,6 +207,7 @@ class TestSessionStartContext:
             "Fresh-onboard suggestion must include force_new=true to avoid "
             "silent pin-resume. Context was: " + ctx[:500]
         )
+        assert "purpose=" not in ctx
 
     def test_online_context_does_not_offer_agent_uuid_resume_by_default(self, tmp_path):
         """agent_uuid resume is a hijack vector when paired with cross-instance

@@ -3,7 +3,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757.svg)](https://docs.claude.com/en/docs/claude-code/plugins)
 [![Codex Plugin](https://img.shields.io/badge/Codex-plugin-10a37f.svg)](./CODEX_START.md)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](.claude-plugin/plugin.json)
 
 Governance client for UNITARES. This repo provides agent-facing skills, commands, and client adapters for connecting coding agents to a running UNITARES governance server.
 
@@ -141,11 +141,13 @@ This repo should not:
 
 ## Check-In Triggers
 
-The plugin emits `process_agent_update` calls at four trigger points:
+The Claude adapter emits `process_agent_update` calls at three trigger points.
+`session-start` is deliberately read-only: it checks server reachability,
+fetches the governance fundamentals excerpt, and prompts the agent to call
+`onboard(force_new=true)` itself.
 
 | Trigger | Hook script | Frequency | `metadata.event` |
 |---|---|---|---|
-| Session starts | `session-start` | once per session | `session_start` |
 | Claude turn ends | `post-stop` | per Claude turn | `turn_stop` |
 | Edit threshold crossed | `post-edit` | every N edits or T seconds | `auto_edit` |
 | Session closes | `session-end` | once per session | `session_end` |
