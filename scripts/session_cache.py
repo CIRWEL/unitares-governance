@@ -14,7 +14,7 @@ Session-cache schema versions
 
 * v1 (pre-S11): ``continuity_token`` was written by ``hooks/post-identity``
   and treated by ``hooks/session-start`` as a resume credential. Under the
-  identity ontology (``unitares/docs/ontology/identity.md``), this
+ identity ontology (````), this
   performatively claimed cross-process-instance continuity without earning
   it. v1 caches may still exist on disk; the token field is treated as
   read-only legacy — downstream readers must not promote it back into a
@@ -435,7 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
             "deployments (e.g., Lumen on dedicated Pi). Operator-asserted — no "
             "runtime substrate-claim attestation here; the principled gate "
             "lives with S19 substrate attestation (see "
-            "docs/ontology/s20-cache-scope-narrowing.md §6)."
+ " §6)."
         ),
     )
     p_set.add_argument("--json")

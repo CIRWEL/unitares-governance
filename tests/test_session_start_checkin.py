@@ -271,7 +271,7 @@ class TestNoCrossInstanceUuidEnumeration:
 
 
 class TestWorkspaceLocalLineage:
-    """Under the identity ontology (S11, unitares/docs/ontology/identity.md),
+    """Under the identity ontology (S11),
     the workspace-local cache surfaces the prior process-instance's UUID as
     a *lineage candidate* — the predecessor the fresh process can declare
     via ``parent_agent_id`` — not as a resume credential.

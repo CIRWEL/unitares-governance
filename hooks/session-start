@@ -162,7 +162,7 @@ fi
 # The slot-scoped cache ./.unitares/session-<claude_session_id>.json, by
 # contrast, is owned by one specific claude process session. On --resume
 # it matches; a fresh session writes its own. Under the identity ontology
-# (unitares/docs/ontology/identity.md) its UUID is surfaced as a *lineage
+# its UUID is surfaced as a *lineage
 # candidate* — the predecessor this fresh process declares via
 # `parent_agent_id` — NOT as a resume credential.
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ header += f"; UUID `{uuid}`."
 
 print(
     header + "\n\nUnder the identity ontology "
-    "(unitares/docs/ontology/identity.md), a fresh process-instance "
+ ", a fresh process-instance "
     "declares lineage rather than resuming identity. To record the "
     "inheritance chain, include in the onboard call below:\n"
     f"    parent_agent_id=\"{uuid}\", spawn_reason=\"new_session\"\n"
@@ -394,7 +394,7 @@ print(
     f"({age_text}). The prior process may have been a different Claude "
     "session (e.g. before `/clear`), a Codex run, a dispatch worker, "
     "or an ad-hoc script.\n\nUnder the identity ontology "
-    "(unitares/docs/ontology/identity.md), a fresh process-instance "
+ ", a fresh process-instance "
     "declares lineage rather than resuming identity. If — and only if — "
     "you are continuing that prior process's work, include in the "
     "onboard call below:\n"
@@ -435,7 +435,7 @@ else
     # operator escape hatch — drop everything else.
     CONTEXT="UNITARES Governance: ONLINE
 Fresh process-instance, MCP stdio unbound. Onboard with \`force_new=true\` (declare \`parent_agent_id\` if continuing prior workspace work — see lineage hint below).
-Ontology: unitares/docs/ontology/identity.md  ·  Recovery: run /diagnose."
+· Recovery: run /diagnose."
   else
     CONTEXT="UNITARES Governance: ONLINE
 
@@ -444,7 +444,7 @@ unbound. As your first governance tool call, invoke:
 
     onboard(force_new=true)
 
-Under the identity ontology (unitares/docs/ontology/identity.md), fresh
+Under the identity ontology, fresh
 process-instances mint fresh governance-identity. \`force_new=true\` is
 the default posture; lineage, when applicable, is declared via
 \`parent_agent_id\` rather than resumed via token.

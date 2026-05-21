@@ -1,6 +1,6 @@
 """S15-c — _fetch_skills.py adapter coverage.
 
-Spec: docs/ontology/s15-server-side-skills.md §9 step 3 + §8.6.
+Spec: §9 step 3 + §8.6.
 
 The helper fetches canonical skill content from the server's `skills`
 MCP tool and falls back to the bundled mirror on offline / failure.

@@ -114,7 +114,7 @@ uuid_val = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
 if not uuid_val:
     _skip("no_uuid_in_response")
 
-# Identity ontology (unitares/docs/ontology/identity.md, §S11): the
+# Identity ontology (, §S11): the
 # workspace cache is a lineage anchor, not a resume credential. We stamp
 # identifying fields (UUID, agent_id, display_name) so the next process-
 # instance's session-start hook can surface the UUID as a parent_agent_id

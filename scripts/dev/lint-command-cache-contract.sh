@@ -19,7 +19,7 @@
 #   ./scripts/dev/lint-command-cache-contract.sh
 #   ./scripts/dev/lint-command-cache-contract.sh commands/foo.md   # one file
 #
-# Plan-doc context: docs/ontology/s11a-skill-text-drift.md §6 in the
+# Plan-doc context: §6 in the
 # unitares repo names this as the regression-prevention test.
 
 set -euo pipefail

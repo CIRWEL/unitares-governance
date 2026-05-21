@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S15-c — Claude Code skill adapter (server fetch with offline fallback).
 
-Per docs/ontology/s15-server-side-skills.md §9 step 3 + §8.6 (MCP-liveness
+Per §9 step 3 + §8.6 (MCP-liveness
 coupling acknowledgment): the plugin's hook-based skill loader fetches
 canonical content from the server's `skills` MCP tool on session start,
 caches the response keyed by `registry_hash`, and falls back to the bundled
