@@ -9,3 +9,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# superpowers plugin planning artifacts
+docs/superpowers/
